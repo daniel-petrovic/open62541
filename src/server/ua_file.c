@@ -127,7 +127,6 @@ getOpenFileResult(UA_FileType *fileObject, UA_Byte fileOpenMode) {
         if(!file)
         {
             UA_LOG_ERROR(UA_Log_Stdout, UA_LOGCATEGORY_SERVER, "Error occured while opening the file");
-            return UA_STATUSCODE_BADNOTFOUND;
         }
         return file;
     }
@@ -139,7 +138,6 @@ getOpenFileResult(UA_FileType *fileObject, UA_Byte fileOpenMode) {
         if(!file)
         {
             UA_LOG_ERROR(UA_Log_Stdout, UA_LOGCATEGORY_SERVER, "Error occured while opening the file");
-            return UA_STATUSCODE_BADNOTFOUND;
         }
         return file;
     }
@@ -152,7 +150,6 @@ getOpenFileResult(UA_FileType *fileObject, UA_Byte fileOpenMode) {
         if(!file)
         {
             UA_LOG_ERROR(UA_Log_Stdout, UA_LOGCATEGORY_SERVER, "Error occured while opening the file");
-            return UA_STATUSCODE_BADNOTFOUND;
         }
         return file;
     }
@@ -164,7 +161,6 @@ getOpenFileResult(UA_FileType *fileObject, UA_Byte fileOpenMode) {
         if(!file)
         {
             UA_LOG_ERROR(UA_Log_Stdout, UA_LOGCATEGORY_SERVER, "Error occured while opening the file");
-            return UA_STATUSCODE_BADNOTFOUND;
         }
         return file;
     }
