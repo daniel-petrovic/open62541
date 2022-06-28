@@ -199,7 +199,7 @@ START_TEST(ReadSingleServerAttribute) {
     UA_DataValue resp = UA_Server_read(server, &rvi, UA_TIMESTAMPSTORETURN_BOTH);
 
     ck_assert_int_eq(resp.status, UA_STATUSCODE_GOOD);
-    ck_assert_int_eq(0, resp.value.arrayLength);
+    ck_assert_uint_eq(0, resp.value.arrayLength);
     ck_assert_int_eq(resp.serverTimestamp, UA_DateTime_now());
     ck_assert_int_eq(resp.sourceTimestamp, UA_DateTime_now());
     UA_DataValue_clear(&resp);
@@ -280,7 +280,7 @@ START_TEST(ReadSingleAttributeBrowseNameWithoutTimestamp) {
     rvi.attributeId = UA_ATTRIBUTEID_BROWSENAME;
 
     UA_DataValue resp = UA_Server_read(server, &rvi, UA_TIMESTAMPSTORETURN_NEITHER);
-    
+
     UA_QualifiedName* respval = (UA_QualifiedName*) resp.value.data;
     const UA_QualifiedName myIntegerName = UA_QUALIFIEDNAME(1, "the answer");
     ck_assert_uint_eq(0, resp.value.arrayLength);
@@ -316,7 +316,7 @@ START_TEST(ReadSingleAttributeDescriptionWithoutTimestamp) {
     rvi.attributeId = UA_ATTRIBUTEID_DESCRIPTION;
 
     UA_DataValue resp = UA_Server_read(server, &rvi, UA_TIMESTAMPSTORETURN_NEITHER);
-    
+
     UA_LocalizedText* respval = (UA_LocalizedText*) resp.value.data;
     UA_VariableNode* compNode = makeCompareSequence();
     ck_assert_uint_eq(0, resp.value.arrayLength);
@@ -334,7 +334,7 @@ START_TEST(ReadSingleAttributeWriteMaskWithoutTimestamp) {
     rvi.attributeId = UA_ATTRIBUTEID_WRITEMASK;
 
     UA_DataValue resp = UA_Server_read(server, &rvi, UA_TIMESTAMPSTORETURN_NEITHER);
-    
+
     UA_UInt32* respval = (UA_UInt32*) resp.value.data;
     ck_assert_uint_eq(0, resp.value.arrayLength);
     ck_assert(&UA_TYPES[UA_TYPES_UINT32] == resp.value.type);
@@ -516,7 +516,7 @@ START_TEST(ReadSingleAttributeMinimumSamplingIntervalWithoutTimestamp) {
     rvi.attributeId = UA_ATTRIBUTEID_MINIMUMSAMPLINGINTERVAL;
 
     UA_DataValue resp = UA_Server_read(server, &rvi, UA_TIMESTAMPSTORETURN_NEITHER);
-    
+
     UA_Double* respval = (UA_Double*) resp.value.data;
     UA_VariableNode *compNode = makeCompareSequence();
     UA_Double comp = (UA_Double) compNode->minimumSamplingInterval;
@@ -607,7 +607,7 @@ START_TEST(ReadSingleDataSourceAttributeArrayDimensionsWithoutTimestamp) {
     rvi.attributeId = UA_ATTRIBUTEID_ARRAYDIMENSIONS;
 
     UA_DataValue resp = UA_Server_read(server, &rvi, UA_TIMESTAMPSTORETURN_NEITHER);
-    
+
     ck_assert_int_eq(UA_STATUSCODE_GOOD, resp.status);
     UA_DataValue_clear(&resp);
 } END_TEST
@@ -825,7 +825,7 @@ START_TEST(WriteSingleAttributeValueWithServerTimestamp) {
     ck_assert(resp.hasValue);
     ck_assert_int_eq(20, *(UA_Int32*)resp.value.data);
     ck_assert(resp.hasServerTimestamp);
-    ck_assert_uint_eq(resp.serverTimestamp, UA_DateTime_now());
+    ck_assert_int_eq(resp.serverTimestamp, UA_DateTime_now());
     UA_DataValue_clear(&resp);
 } END_TEST
 

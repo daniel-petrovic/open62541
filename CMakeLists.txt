@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.0...3.12)
+cmake_minimum_required(VERSION 3.1...3.12)
 if(UA_BUILD_FUZZING OR UA_BUILD_OSS_FUZZ OR UA_BUILD_FUZZING_CORPUS)
     project(open62541) # We need to have C++ support configured for fuzzing
 else()
@@ -12,6 +12,9 @@ endif()
 string(TOLOWER "${CMAKE_BUILD_TYPE}" BUILD_TYPE_LOWER_CASE)
 
 set(CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/tools/cmake")
+if(${CMAKE_VERSION} VERSION_LESS 3.12)
+    set(CMAKE_MODULE_PATH "${CMAKE_MODULE_PATH};${PROJECT_SOURCE_DIR}/tools/cmake3.12")
+endif()
 find_package(Python3 REQUIRED)
 set(PYTHON_EXECUTABLE ${Python3_EXECUTABLE})
 find_package(Git)
@@ -20,7 +23,8 @@ include(GNUInstallDirs)
 
 # Set when installed via make install
 set(open62541_TOOLS_DIR ${PROJECT_SOURCE_DIR}/tools)
-set(open62541_NODESET_DIR ${PROJECT_SOURCE_DIR}/deps/ua-nodeset)
+set(UA_NODESET_DIR ${PROJECT_SOURCE_DIR}/deps/ua-nodeset CACHE STRING "The path to the nodetset directory.")
+set(open62541_MQTT_DIR ${PROJECT_SOURCE_DIR}/deps/mqtt-c)
 
 include(macros_internal)
 include(macros_public)
@@ -41,10 +45,10 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 # number from the latest release plus the "-undefined" label. Will be
 # overwritten with more detailed information if git is available.
 set(OPEN62541_VER_MAJOR 1)
-set(OPEN62541_VER_MINOR 2)
+set(OPEN62541_VER_MINOR 3)
 set(OPEN62541_VER_PATCH 2)
-set(OPEN62541_VER_LABEL "-unknown") # like "-rc1" or "-g4538abcd" or "-g4538abcd-dirty"
-set(OPEN62541_VER_COMMIT "undefined")
+set(OPEN62541_VER_LABEL "-undefined") # like "-rc1" or "-g4538abcd" or "-g4538abcd-dirty"
+set(OPEN62541_VER_COMMIT "unknown-commit")
 
 # Overwrite the version information based on git if available
 include(SetGitBasedVersion)
@@ -117,14 +121,18 @@ GET_PROPERTY(ua_architecture_sources GLOBAL PROPERTY UA_ARCHITECTURE_SOURCES)
 
 set(ua_architecture_sources ${ua_architecture_sources}
     ${PROJECT_SOURCE_DIR}/arch/network_tcp.c
+    ${PROJECT_SOURCE_DIR}/arch/eventloop_posix.h
     ${PROJECT_SOURCE_DIR}/arch/eventloop_posix.c
+    ${PROJECT_SOURCE_DIR}/arch/eventloop_posix_select.c
+    ${PROJECT_SOURCE_DIR}/arch/eventloop_posix_epoll.c
     ${PROJECT_SOURCE_DIR}/arch/eventloop_posix_tcp.c
+    ${PROJECT_SOURCE_DIR}/arch/eventloop_posix_udp.c
+    ${PROJECT_SOURCE_DIR}/arch/eventloop_posix_interrupt.c
 )
 
 set(ua_architecture_headers ${ua_architecture_headers}
     ${PROJECT_SOURCE_DIR}/include/open62541/network_tcp.h
     ${PROJECT_SOURCE_DIR}/include/open62541/architecture_functions.h
-    ${PROJECT_SOURCE_DIR}/arch/eventloop_posix.h
 )
 
 if(UA_ENABLE_WEBSOCKET_SERVER)
@@ -150,14 +158,23 @@ endforeach(arch_ ${architectures})
 
 # Options
 option(BUILD_SHARED_LIBS "Enable building of shared libraries (dll/so)" OFF)
-set(UA_LOGLEVEL 300 CACHE STRING "Level at which logs shall be reported")
-set(UA_MULTITHREADING 0 CACHE STRING "Level of multithreading (0-99: No Multithreading, >=100: Thread-Safe API")
+set(UA_LOGLEVEL 300 CACHE STRING "Minimal level at which logs shall be reported (100=TRACE, 200=DEBUG, 300=INFO, 400=WARNING, 500=ERROR, 600=FATAL)")
+option(UA_ENABLE_DIAGNOSTICS "Enable diagnostics information exposed by the server" OFF)
 option(UA_ENABLE_METHODCALLS "Enable the Method service set" ON)
 option(UA_ENABLE_SUBSCRIPTIONS "Enable subscriptions support" ON)
 option(UA_ENABLE_SUBSCRIPTIONS_EVENTS "Enable event monitoring" ON)
 option(UA_ENABLE_DA "Enable OPC UA DataAccess (Part 8) definitions" ON)
 option(UA_ENABLE_HISTORIZING "Enable basic support for historical access (client and server)" OFF)
 option(UA_ENABLE_DISCOVERY "Enable Discovery Service (LDS)" OFF)
+option(UA_ENABLE_JSON_ENCODING "Enable JSON encoding" OFF)
+
+set(MULTITHREADING_DEFAULT 0)
+if(WIN32 OR UNIX)
+  # Enable multithreading by default on Windows and POSIX-like (Unix) systems
+  set(MULTITHREADING_DEFAULT 100)
+endif()
+set(UA_MULTITHREADING ${MULTITHREADING_DEFAULT} CACHE STRING
+    "Multithreading support (<100: No multithreading support, >=100: Thread-safety enabled (internal mutexes)")
 
 option(UA_ENABLE_SUBSCRIPTIONS_ALARMS_CONDITIONS "Enable the use of A&C. (EXPERIMENTAL)" OFF)
 mark_as_advanced(UA_ENABLE_SUBSCRIPTIONS_ALARMS_CONDITIONS)
@@ -300,7 +317,7 @@ if(UA_ENABLE_COVERAGE)
 endif()
 
 if(UA_ENABLE_CLANG_COV)
-    if(NOT "x${CMAKE_C_COMPILER_ID}" STREQUAL "xClang")
+    if(NOT CMAKE_C_COMPILER_ID STREQUAL "Clang")
         message(FATAL_ERROR "Compiler must be clang when compiling for llvm-cov")
     endif()
     if(UA_ENABLE_COVERAGE)
@@ -350,6 +367,9 @@ if(UA_FORCE_CPP)
 endif()
 
 option(UA_FORCE_WERROR "Force compilation with -Werror (or /WX on MSVC)" ON)
+
+option(UA_ENABLE_DEBUG_SANITIZER "Use sanitizer in debug mode" ON)
+mark_as_advanced(UA_ENABLE_DEBUG_SANITIZER)
 
 #General PubSub setup
 option(UA_ENABLE_PUBSUB "Enable the PubSub protocol" OFF)
@@ -415,36 +435,64 @@ if(UA_ENABLE_PUBSUB_BUFMALLOC)
     if(NOT UA_ENABLE_MALLOC_SINGLETON)
         message(FATAL_ERROR "PubSub buffer allocation cannot be used without 'UA_ENABLE_MALLOC_SINGLETON' enabled")
     endif()
+    if(UA_ENABLE_PUBSUB_MONITORING)
+        message(WARNING "PubSub monitoring option 'UA_ENABLE_PUBSUB_MONITORING' can only be used with option 'UA_ENABLE_PUBSUB_BUFMALLOC' if "
+            "a custom monitoring interface is provided, which does not allocate/deallocate memory at start/stopMonitoring callback. "
+            "It can't be used with the built-in ua_timer implementation, because this leads to memory deallocation problems.")
+    endif()
 endif()
-
-option(UA_ENABLE_JSON_ENCODING "Enable Json encoding (EXPERIMENTAL)" OFF)
-mark_as_advanced(UA_ENABLE_JSON_ENCODING)
 
 option(UA_ENABLE_PUBSUB_MQTT "Enable publish/subscribe with mqtt (experimental)" OFF)
 mark_as_advanced(UA_ENABLE_PUBSUB_MQTT)
 if(UA_ENABLE_PUBSUB_MQTT)
-    # Warn if run in Windows
-    if(WIN32)
-        MESSAGE(WARNING "Multithreading is enabled in MQTT plugin. This feature is under development and marked as EXPERIMENTAL")
+    if(UA_ENABLE_AMALGAMATION)
+        # MQTT Support currently not compatible with the amalgamation
+        message(FATAL_ERROR "Amalgamation cannot be generated with MQTT enabled")
     endif()
-    if(NOT UA_ENABLE_PUBSUB)
-    message(FATAL_ERROR "Mqtt cannot be used with disabled PubSub function.")
-    endif()
-endif()
 
-option(UA_ENABLE_MQTT_TLS "Enable TLS support for publish/subscribe with mqtt" OFF)
-mark_as_advanced(UA_ENABLE_MQTT_TLS)
-if(UA_ENABLE_MQTT_TLS)
-        if(NOT UA_ENABLE_PUBSUB_MQTT)
-            message(FATAL_ERROR "Mqtt with TLS cannot be used without UA_ENABLE_PUBSUB_MQTT.")
+    if(NOT UA_FILE_MQTT)
+        set(UA_FILE_MQTT ${open62541_MQTT_DIR}/src/mqtt.c)
+    endif()
+    if(NOT EXISTS "${UA_FILE_MQTT}")
+        message(FATAL_ERROR "File ${UA_FILE_MQTT} not found.You probably need to initialize the git submodule for deps/mqtt-c.Therefore execute the following command \ngit submodule update --init --recursive")
+    else()
+        # Warn if run in Windows
+        if(WIN32)
+            MESSAGE(WARNING "Multithreading is enabled in MQTT plugin. This feature is under development and marked as EXPERIMENTAL")
         endif()
-        set(UA_ENABLE_MQTT_TLS_OPENSSL ON)
+        if(NOT UA_ENABLE_PUBSUB)
+        message(FATAL_ERROR "Mqtt cannot be used with disabled PubSub function.")
+        endif()
+        configure_file(${PROJECT_SOURCE_DIR}/deps/mqtt-c/include/mqtt.h "${PROJECT_BINARY_DIR}/src_generated/mqtt.h" COPYONLY)
+        configure_file(${PROJECT_SOURCE_DIR}/deps/mqtt-c/include/mqtt_pal.h "${PROJECT_BINARY_DIR}/src_generated/mqtt_pal.h" COPYONLY)
+        configure_file(${PROJECT_SOURCE_DIR}/plugins/mqtt/templates/posix_sockets.h "${PROJECT_BINARY_DIR}/src_generated/posix_sockets.h" COPYONLY)
+    endif()
 endif()
 
 option(UA_ENABLE_MQTT_TLS_OPENSSL "Enable TLS support for publish/subscribe with mqtt (use OpenSSL)" OFF)
 mark_as_advanced(UA_ENABLE_MQTT_TLS_OPENSSL)
-if(UA_ENABLE_MQTT_TLS_OPENSSL)
-    set(UA_ENABLE_MQTT_TLS ON)
+option(UA_ENABLE_MQTT_TLS_MBEDTLS "Enable TLS support for publish/subscribe with mqtt (use MBEDTLS)" OFF)
+mark_as_advanced(UA_ENABLE_MQTT_TLS_MBEDTLS)
+
+option(UA_ENABLE_MQTT_TLS "Enable TLS support for publish/subscribe with mqtt" OFF)
+mark_as_advanced(UA_ENABLE_MQTT_TLS)
+if(UA_ENABLE_MQTT_TLS)
+    if(NOT UA_ENABLE_PUBSUB_MQTT)
+        message(FATAL_ERROR "Mqtt with TLS cannot be used without UA_ENABLE_PUBSUB_MQTT.")
+    endif()
+    if(NOT UA_ENABLE_ENCRYPTION)
+        message(FATAL_ERROR "Mqtt with TLS cannot be used without UA_ENABLE_ENCRYPTION.")
+    elseif(UA_ENABLE_ENCRYPTION STREQUAL "OPENSSL")
+        set(UA_ENABLE_MQTT_TLS_OPENSSL ON)
+        add_definitions(-DMQTT_USE_BIO)
+        configure_file(${PROJECT_SOURCE_DIR}/plugins/mqtt/templates/openssl_sockets.h "${PROJECT_BINARY_DIR}/src_generated/openssl_sockets.h" COPYONLY)
+    elseif(UA_ENABLE_ENCRYPTION STREQUAL "MBEDTLS")
+        set(UA_ENABLE_MQTT_TLS_MBEDTLS ON)
+        add_definitions(-DMQTT_USE_MBEDTLS)
+        configure_file(${PROJECT_SOURCE_DIR}/plugins/mqtt/templates/mbedtls_sockets.h "${PROJECT_BINARY_DIR}/src_generated/mbedtls_sockets.h" COPYONLY)
+    else()
+        message(FATAL_ERROR "UA_ENABLE_ENCRYPTION is set to an undefined value")
+    endif()
 endif()
 
 option(UA_ENABLE_STATUSCODE_DESCRIPTIONS "Enable conversion of StatusCode to human-readable error message" ON)
@@ -565,6 +613,11 @@ if(UA_ENABLE_SUBSCRIPTIONS_ALARMS_CONDITIONS)
     MESSAGE(WARNING "UA_ENABLE_SUBSCRIPTIONS_ALARMS_CONDITIONS is enabled. The feature is under development and marked as EXPERIMENTAL")
 endif()
 
+if(UA_ENABLE_SUBSCRIPTIONS_EVENTS AND (NOT UA_ENABLE_SUBSCRIPTIONS))
+    MESSAGE(WARNING "UA_ENABLE_SUBSCRIPTIONS_EVENTS needs Subscriptions enabled")
+    set(UA_ENABLE_SUBSCRIPTIONS_EVENTS OFF)
+endif()
+
 ########################
 # Linting during build #
 ########################
@@ -641,14 +694,15 @@ function(check_add_cc_flag CC_FLAG)
     endif()
 endfunction()
 
-if(NOT UA_FORCE_CPP AND (CMAKE_COMPILER_IS_GNUCC OR "x${CMAKE_C_COMPILER_ID}" STREQUAL "xClang"))
+if(NOT UA_FORCE_CPP AND (CMAKE_COMPILER_IS_GNUCC OR CMAKE_C_COMPILER_ID STREQUAL "Clang"))
     check_add_cc_flag("-std=c99")   # C99 mode
     check_add_cc_flag("-pipe")      # Avoid writing temporary files (for compiler speed)
     check_add_cc_flag("-Wall")      # Warnings
     check_add_cc_flag("-Wextra")    # More warnings
     check_add_cc_flag("-Wpedantic") # Standard compliance
     if(UA_FORCE_WERROR)
-        check_add_cc_flag("-Werror")    # All warnings are errors
+        check_add_cc_flag("-Werror") # All warnings are errors
+        check_add_cc_flag("-Wunused-command-line-argument") # Warning for command line args instead of error
     endif()
 
     check_add_cc_flag("-Wno-static-in-inline") # Clang doesn't like the use of static inline methods inside static inline methods
@@ -681,6 +735,10 @@ if(NOT UA_FORCE_CPP AND (CMAKE_COMPILER_IS_GNUCC OR "x${CMAKE_C_COMPILER_ID}" ST
     # Generate position-independent code for shared libraries (adds a performance penalty)
     if(BUILD_SHARED_LIBS)
         check_add_cc_flag("-fPIC")
+    endif()
+
+    if(UA_MULTITHREADING GREATER_EQUAL 100 AND NOT WIN32)
+        check_add_cc_flag("-pthread")
     endif()
 
     # Force 32bit build
@@ -729,13 +787,13 @@ if(NOT UA_FORCE_CPP AND (CMAKE_COMPILER_IS_GNUCC OR "x${CMAKE_C_COMPILER_ID}" ST
     set(CMAKE_SHARED_LIBRARY_LINK_C_FLAGS "") # cmake sets -rdynamic by default
 
     # Debug
-    if(BUILD_TYPE_LOWER_CASE STREQUAL "debug" AND UNIX AND NOT UA_BUILD_OSS_FUZZ AND
-       "x${CMAKE_C_COMPILER_ID}" STREQUAL "xClang" AND NOT UA_ENABLE_UNIT_TESTS_MEMCHECK)
+    if(UA_ENABLE_DEBUG_SANITIZER AND BUILD_TYPE_LOWER_CASE STREQUAL "debug" AND UNIX AND NOT UA_BUILD_OSS_FUZZ AND
+       CMAKE_C_COMPILER_ID STREQUAL "Clang" AND NOT UA_ENABLE_UNIT_TESTS_MEMCHECK)
         # Add default sanitizer settings when using clang and Debug build.
         # This allows e.g. CLion to find memory locations for SegFaults
         message(STATUS "Sanitizer enabled")
         set(SANITIZER_FLAGS "-g -fno-omit-frame-pointer -gline-tables-only -fsanitize=address -fsanitize-address-use-after-scope -fsanitize=leak -fsanitize=undefined")
-        if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS 10.0)
+        if(CMAKE_CXX_COMPILER_VERSION AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 10.0)
             set(SANITIZER_FLAGS "${SANITIZER_FLAGS} -fsanitize-coverage=trace-pc-guard")
         endif()
         set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${SANITIZER_FLAGS}")
@@ -920,6 +978,7 @@ set(lib_sources ${PROJECT_SOURCE_DIR}/src/ua_types.c
                 ${PROJECT_SOURCE_DIR}/src/server/ua_nodes.c
                 ${PROJECT_SOURCE_DIR}/src/server/ua_server.c
                 ${PROJECT_SOURCE_DIR}/src/server/ua_server_ns0.c
+                ${PROJECT_SOURCE_DIR}/src/server/ua_server_ns0_diagnostics.c
                 ${PROJECT_SOURCE_DIR}/src/server/ua_server_config.c
                 ${PROJECT_SOURCE_DIR}/src/server/ua_server_binary.c
                 ${PROJECT_SOURCE_DIR}/src/server/ua_server_utils.c
@@ -1081,14 +1140,14 @@ if(UA_ENABLE_PUBSUB)
         if(WIN32)
             MESSAGE(WARNING "Multithreading is enabled in MQTT plugin. This feature is under development and marked as EXPERIMENTAL")
         else()
-            list(APPEND default_plugin_headers ${PROJECT_SOURCE_DIR}/deps/mqtt-c/mqtt_pal.h
-                                               ${PROJECT_SOURCE_DIR}/deps/mqtt-c/mqtt.h
-                                               ${PROJECT_SOURCE_DIR}/plugins/ua_network_pubsub_mqtt.h
-                                               ${PROJECT_SOURCE_DIR}/plugins/mqtt/ua_mqtt_adapter.h)
-            list(APPEND default_plugin_sources ${PROJECT_SOURCE_DIR}/plugins/mqtt/ua_mqtt_pal.c
-                                               ${PROJECT_SOURCE_DIR}/deps/mqtt-c/mqtt.c
-                                               ${PROJECT_SOURCE_DIR}/plugins/ua_network_pubsub_mqtt.c
-                                               ${PROJECT_SOURCE_DIR}/plugins/mqtt/ua_mqtt_adapter.c)
+            list(APPEND default_plugin_headers ${PROJECT_SOURCE_DIR}/deps/mqtt-c/include/mqtt_pal.h
+                 ${PROJECT_SOURCE_DIR}/deps/mqtt-c/include/mqtt.h
+                 ${PROJECT_SOURCE_DIR}/plugins/include/open62541/plugin/pubsub_mqtt.h
+                 ${PROJECT_SOURCE_DIR}/plugins/mqtt/ua_mqtt-c_adapter.h)
+            list(APPEND default_plugin_sources ${PROJECT_SOURCE_DIR}/deps/mqtt-c/src/mqtt_pal.c
+                 ${PROJECT_SOURCE_DIR}/deps/mqtt-c/src/mqtt.c
+                 ${PROJECT_SOURCE_DIR}/plugins/ua_pubsub_mqtt.c
+                 ${PROJECT_SOURCE_DIR}/plugins/mqtt/ua_mqtt-c_adapter.c)
         endif()
     endif()
     if(UA_ENABLE_MALLOC_SINGLETON AND UA_ENABLE_PUBSUB_BUFMALLOC)
@@ -1105,14 +1164,16 @@ if(UA_ENABLE_JSON_ENCODING)
         list(APPEND lib_sources ${PROJECT_SOURCE_DIR}/src/pubsub/ua_pubsub_networkmessage_json.c)
     endif()
     list(APPEND internal_headers ${PROJECT_SOURCE_DIR}/deps/jsmn/jsmn.h
+                                 ${PROJECT_SOURCE_DIR}/deps/cj5.h
                                  ${PROJECT_SOURCE_DIR}/deps/string_escape.h
                                  ${PROJECT_SOURCE_DIR}/deps/itoa.h
-                                 ${PROJECT_SOURCE_DIR}/deps/atoi.h
+                                 ${PROJECT_SOURCE_DIR}/deps/parse_num.h
                                  ${PROJECT_SOURCE_DIR}/src/ua_types_encoding_json.h)
     list(APPEND lib_sources ${PROJECT_SOURCE_DIR}/deps/jsmn/jsmn.c
+                            ${PROJECT_SOURCE_DIR}/deps/cj5.c
                             ${PROJECT_SOURCE_DIR}/deps/string_escape.c
                             ${PROJECT_SOURCE_DIR}/deps/itoa.c
-                            ${PROJECT_SOURCE_DIR}/deps/atoi.c
+                            ${PROJECT_SOURCE_DIR}/deps/parse_num.c
                             ${PROJECT_SOURCE_DIR}/src/ua_types_encoding_json.c)
 endif()
 
@@ -1124,7 +1185,9 @@ if(UA_ENABLE_SUBSCRIPTIONS)
         if(UA_NAMESPACE_ZERO STREQUAL "MINIMAL")
             message(FATAL_ERROR "Events require at least the reduced Namespace Zero")
         endif()
-        list(APPEND lib_sources ${PROJECT_SOURCE_DIR}/src/server/ua_subscription_events.c)
+        list(APPEND lib_sources
+                    ${PROJECT_SOURCE_DIR}/src/server/ua_subscription_events.c
+                    ${PROJECT_SOURCE_DIR}/src/server/ua_subscription_events_filter.c)
         if(UA_ENABLE_SUBSCRIPTIONS_ALARMS_CONDITIONS)
             list(APPEND lib_sources ${PROJECT_SOURCE_DIR}/src/server/ua_subscription_alarms_conditions.c)
         endif()
@@ -1166,17 +1229,18 @@ set(UA_FILE_NODESETS)
 
 if(UA_NAMESPACE_ZERO STREQUAL "FULL")
     if(NOT UA_FILE_NS0)
-        set(UA_FILE_NS0 ${open62541_NODESET_DIR}/Schema/Opc.Ua.NodeSet2.xml)
+        set(UA_FILE_NS0 ${UA_NODESET_DIR}/Schema/Opc.Ua.NodeSet2.xml)
     endif()
     set(UA_FILE_NODESETS "${UA_FILE_NS0}")
 
     if(NOT EXISTS "${UA_FILE_NS0}")
-        message(FATAL_ERROR "File ${UA_FILE_NS0} not found. You probably need to initialize the git submodule for deps/ua-nodeset or set open62541_NODESET_DIR.")
+        message(FATAL_ERROR "File ${UA_FILE_NS0} not found. You probably need to initialize the git submodule for deps/ua-nodeset or set UA_NODESET_DIR.")
     endif()
 
-    set(UA_FILE_NODEIDS ${open62541_NODESET_DIR}/Schema/NodeIds.csv)
-    set(UA_FILE_STATUSCODES ${open62541_NODESET_DIR}/Schema/StatusCode.csv)
-    set(UA_FILE_TYPES_BSD ${open62541_NODESET_DIR}/Schema/Opc.Ua.Types.bsd)
+
+    set(UA_FILE_NODEIDS ${UA_NODESET_DIR}/Schema/NodeIds.csv)
+    set(UA_FILE_STATUSCODES ${UA_NODESET_DIR}/Schema/StatusCode.csv)
+    set(UA_FILE_TYPES_BSD ${UA_NODESET_DIR}/Schema/Opc.Ua.Types.bsd)
 else()
     if(NOT UA_FILE_NS0)
         set(UA_FILE_NS0 ${PROJECT_SOURCE_DIR}/tools/schema/Opc.Ua.NodeSet2.Reduced.xml)
@@ -1190,6 +1254,11 @@ else()
 
     if(UA_ENABLE_METHODCALLS)
         list(APPEND UA_FILE_DATATYPES ${PROJECT_SOURCE_DIR}/tools/schema/datatypes_method.txt)
+    endif()
+
+    if(UA_ENABLE_DIAGNOSTICS)
+        list(APPEND UA_FILE_DATATYPES ${PROJECT_SOURCE_DIR}/tools/schema/datatypes_diagnostics.txt)
+        list(APPEND UA_FILE_NODESETS ${PROJECT_SOURCE_DIR}/tools/schema/Opc.Ua.NodeSet2.DiagnosticsMinimal.xml)
     endif()
 
     if(UA_ENABLE_SUBSCRIPTIONS)
@@ -1281,7 +1350,7 @@ if(UA_ENABLE_AMALGAMATION)
     add_custom_command(OUTPUT ${PROJECT_BINARY_DIR}/open62541.h
                        PRE_BUILD
                        COMMAND ${PYTHON_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/amalgamate.py
-                               ${OPEN62541_VER_COMMIT} ${CMAKE_CURRENT_BINARY_DIR}/open62541.h
+                               ${OPEN62541_VERSION} ${CMAKE_CURRENT_BINARY_DIR}/open62541.h
                                ${exported_headers} ${default_plugin_headers} ${ua_architecture_headers}
                        DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/tools/amalgamate.py
                                ${exported_headers} ${default_plugin_headers} ${ua_architecture_headers})
@@ -1289,7 +1358,7 @@ if(UA_ENABLE_AMALGAMATION)
     add_custom_command(OUTPUT ${PROJECT_BINARY_DIR}/open62541.c
                        PRE_BUILD
                        COMMAND ${PYTHON_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/amalgamate.py
-                               ${OPEN62541_VER_COMMIT} ${CMAKE_CURRENT_BINARY_DIR}/open62541.c
+                               ${OPEN62541_VERSION} ${CMAKE_CURRENT_BINARY_DIR}/open62541.c
                                ${internal_headers} ${lib_sources} ${default_plugin_sources} ${ua_architecture_sources}
                        DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/tools/amalgamate.py ${internal_headers}
                                ${lib_sources} ${default_plugin_sources} ${ua_architecture_sources} )
@@ -1661,7 +1730,7 @@ endif()
 set(UA_install_tools_dirs "tools/certs"
     "tools/nodeset_compiler"
     "tools/schema"
-    ${open62541_NODESET_DIR})
+    ${UA_NODESET_DIR})
 
 set(UA_install_tools_files "tools/generate_datatypes.py"
     "tools/generate_nodeid_header.py"
@@ -1713,21 +1782,24 @@ if(NOT UA_ENABLE_AMALGAMATION)
         string(REPLACE ${BASE_PATH_GENERATED} "" file ${file})
         string(REPLACE ${BASE_PATH_DEPS} "" file ${file})
 
-        get_filename_component( dir ${file} DIRECTORY )
-        if(${full_path} MATCHES ${BASE_PATH_DEPS})
-            install( FILES ${full_path} DESTINATION include${dir} )
+        get_filename_component(dir ${file} DIRECTORY)
+
+        string(FIND "${full_path}" "${BASE_PATH_DEPS}" has_base_path)
+        if("${has_base_path}" EQUAL 0)
+            install(FILES ${full_path} DESTINATION include${dir})
         else()
-            install( FILES ${full_path} DESTINATION include/open62541${dir} )
+            install(FILES ${full_path} DESTINATION include/open62541${dir})
         endif()
     endforeach()
-
 else()
     # Export amalgamated header open62541.h which is generated due to build of
     # open62541-object
     install(FILES ${PROJECT_BINARY_DIR}/open62541.h DESTINATION include)
 endif()
 
-add_subdirectory(tools/packaging)
+if (UA_PACK_DEBIAN)
+    add_subdirectory(tools/packaging)
+endif()
 
 ##################################
 # Visual studio solution folders #

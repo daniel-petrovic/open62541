@@ -1,6 +1,6 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, You can obtain one at http://mozilla.org/MPL/2.0/. 
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  *
  *    Copyright 2015-2018 (c) Fraunhofer IOSB (Author: Julius Pfrommer)
  *    Copyright 2015 (c) Oleksiy Vasylyev
@@ -22,6 +22,26 @@
 /* Subscriptions */
 /*****************/
 
+static enum ZIP_CMP
+/* For ZIP_TREE we use clientHandle comparison */
+UA_ClientHandle_cmp(const void *a, const void *b) {
+    const UA_Client_MonitoredItem *aa = (const UA_Client_MonitoredItem *)a;
+    const UA_Client_MonitoredItem *bb = (const UA_Client_MonitoredItem *)b;
+
+    /* Compare  clientHandle */
+    if(aa->clientHandle < bb->clientHandle) {
+        return ZIP_CMP_LESS;
+    }
+    if(aa->clientHandle > bb->clientHandle) {
+        return ZIP_CMP_MORE;
+    }
+
+    return ZIP_CMP_EQ;
+}
+
+ZIP_FUNCTIONS(MonitorItemsTree, UA_Client_MonitoredItem, zipfields,
+              UA_Client_MonitoredItem, zipfields, UA_ClientHandle_cmp)
+
 static void
 MonitoredItem_delete(UA_Client *client, UA_Client_Subscription *sub,
                      UA_Client_MonitoredItem *mon);
@@ -34,7 +54,7 @@ ua_Subscriptions_create(UA_Client *client, UA_Client_Subscription *newSub,
     newSub->lastActivity = UA_DateTime_nowMonotonic();
     newSub->publishingInterval = response->revisedPublishingInterval;
     newSub->maxKeepAliveCount = response->revisedMaxKeepAliveCount;
-    LIST_INIT(&newSub->monitoredItems);
+    ZIP_INIT(&newSub->monitoredItems);
     LIST_INSERT_HEAD(&client->subscriptions, newSub, listEntry);
 }
 
@@ -169,7 +189,7 @@ UA_Client_Subscriptions_modify(UA_Client *client,
         response.responseHeader.serviceResult = UA_STATUSCODE_BADSUBSCRIPTIONIDINVALID;
         return response;
     }
-    
+
     /* Call the service */
     __UA_Client_Service(client,
                         &request, &UA_TYPES[UA_TYPES_MODIFYSUBSCRIPTIONREQUEST],
@@ -205,14 +225,26 @@ UA_Client_Subscriptions_modify_async(UA_Client *client,
 }
 
 static void
+UA_MonitoredItem_delete_wrapper(UA_Client_MonitoredItem *mon, void *data) {
+    struct UA_Client_MonitoredItem_ForDelete *deleteMonitoredItem =
+        (struct UA_Client_MonitoredItem_ForDelete *)data;
+    if(deleteMonitoredItem != NULL) {
+        if(deleteMonitoredItem->monitoredItemId != NULL &&
+           (mon->monitoredItemId != *deleteMonitoredItem->monitoredItemId)) {
+            return;
+        }
+        MonitoredItem_delete(deleteMonitoredItem->client, deleteMonitoredItem->sub, mon);
+    }
+}
+
+static void
 UA_Client_Subscription_deleteInternal(UA_Client *client,
                                       UA_Client_Subscription *sub) {
     /* Remove the MonitoredItems */
-    UA_Client_MonitoredItem *mon;
-    UA_Client_MonitoredItem *mon_tmp;
-    LIST_FOREACH_SAFE(mon, &sub->monitoredItems, listEntry, mon_tmp)
-        MonitoredItem_delete(client, sub, mon);
-
+    struct UA_Client_MonitoredItem_ForDelete deleteMonitoredItem = {0};
+    deleteMonitoredItem.client = client;
+    deleteMonitoredItem.sub = sub;
+    ZIP_ITER(MonitorItemsTree,&sub->monitoredItems, UA_MonitoredItem_delete_wrapper, &deleteMonitoredItem);
     /* Call the delete callback */
     if(sub->deleteCallback)
         sub->deleteCallback(client, sub->subscriptionId, sub->context);
@@ -323,7 +355,7 @@ UA_Client_Subscriptions_deleteSingle(UA_Client *client, UA_UInt32 subscriptionId
     UA_DeleteSubscriptionsRequest_init(&request);
     request.subscriptionIds = &subscriptionId;
     request.subscriptionIdsSize = 1;
-    
+
     UA_DeleteSubscriptionsResponse response =
         UA_Client_Subscriptions_delete(client, request);
 
@@ -350,7 +382,7 @@ UA_Client_Subscriptions_deleteSingle(UA_Client *client, UA_UInt32 subscriptionId
 static void
 MonitoredItem_delete(UA_Client *client, UA_Client_Subscription *sub,
                      UA_Client_MonitoredItem *mon) {
-    LIST_REMOVE(mon, listEntry);
+    ZIP_REMOVE(MonitorItemsTree, &sub->monitoredItems, mon);
     if(mon->deleteCallback)
         mon->deleteCallback(client, sub->subscriptionId, sub->context,
                             mon->monitoredItemId, mon->context);
@@ -422,7 +454,7 @@ ua_MonitoredItems_create(UA_Client *client, MonitoredItems_CreateData *data,
         newMon->isEventMonitoredItem =
             (request->itemsToCreate[i].itemToMonitor.attributeId ==
              UA_ATTRIBUTEID_EVENTNOTIFIER);
-        LIST_INSERT_HEAD(&sub->monitoredItems, newMon, listEntry);
+        ZIP_INSERT(MonitorItemsTree, &sub->monitoredItems, newMon, UA_UInt32_random());
 
         UA_LOG_DEBUG(&client->config.logger, UA_LOGCATEGORY_CLIENT,
                      "Subscription %" PRIu32
@@ -463,24 +495,27 @@ MonitoredItems_CreateData_prepare(UA_Client *client,
                                   MonitoredItems_CreateData *data) {
     /* Align arrays and copy over */
     UA_StatusCode retval = UA_STATUSCODE_BADOUTOFMEMORY;
-    data->contexts = (void **)UA_malloc(sizeof(void *) * request->itemsToCreateSize);
+    data->contexts = (void **)UA_calloc(request->itemsToCreateSize, sizeof(void *));
     if(!data->contexts)
         goto cleanup;
-    memcpy(data->contexts, contexts, request->itemsToCreateSize * sizeof(void *));
+    if(contexts)
+        memcpy(data->contexts, contexts, request->itemsToCreateSize * sizeof(void *));
 
     data->deleteCallbacks = (UA_Client_DeleteMonitoredItemCallback *)
-        UA_malloc(request->itemsToCreateSize * sizeof(UA_Client_DeleteMonitoredItemCallback));
+        UA_calloc(request->itemsToCreateSize, sizeof(UA_Client_DeleteMonitoredItemCallback));
     if(!data->deleteCallbacks)
         goto cleanup;
-    memcpy(data->deleteCallbacks, deleteCallbacks,
-           request->itemsToCreateSize * sizeof(UA_Client_DeleteMonitoredItemCallback));
+    if(deleteCallbacks)
+        memcpy(data->deleteCallbacks, deleteCallbacks,
+               request->itemsToCreateSize * sizeof(UA_Client_DeleteMonitoredItemCallback));
 
     data->handlingCallbacks = (void **)
-        UA_malloc(request->itemsToCreateSize * sizeof(void *));
+        UA_calloc(request->itemsToCreateSize, sizeof(void *));
     if(!data->handlingCallbacks)
         goto cleanup;
-    memcpy(data->handlingCallbacks, handlingCallbacks,
-           request->itemsToCreateSize * sizeof(void *));
+    if(handlingCallbacks)
+        memcpy(data->handlingCallbacks, handlingCallbacks,
+               request->itemsToCreateSize * sizeof(void *));
 
     retval = UA_CreateMonitoredItemsRequest_copy(request, &data->request);
     if(retval != UA_STATUSCODE_GOOD)
@@ -608,7 +643,7 @@ UA_Client_MonitoredItems_createDataChange(UA_Client *client, UA_UInt32 subscript
     request.timestampsToReturn = timestampsToReturn;
     request.itemsToCreate = (UA_MonitoredItemCreateRequest*)(uintptr_t)&item;
     request.itemsToCreateSize = 1;
-    UA_CreateMonitoredItemsResponse response = 
+    UA_CreateMonitoredItemsResponse response =
        UA_Client_MonitoredItems_createDataChanges(client, request, &context,
                                                    &callback, &deleteCallback);
     UA_MonitoredItemCreateResult result;
@@ -619,7 +654,7 @@ UA_Client_MonitoredItems_createDataChange(UA_Client *client, UA_UInt32 subscript
     if(result.statusCode == UA_STATUSCODE_GOOD &&
        response.resultsSize != 1)
         result.statusCode = UA_STATUSCODE_BADINTERNALERROR;
-    
+
     if(result.statusCode == UA_STATUSCODE_GOOD)
        UA_MonitoredItemCreateResult_copy(&response.results[0] , &result);
     UA_CreateMonitoredItemsResponse_clear(&response);
@@ -664,7 +699,7 @@ UA_Client_MonitoredItems_createEvent(UA_Client *client, UA_UInt32 subscriptionId
     request.timestampsToReturn = timestampsToReturn;
     request.itemsToCreate = (UA_MonitoredItemCreateRequest*)(uintptr_t)&item;
     request.itemsToCreateSize = 1;
-    UA_CreateMonitoredItemsResponse response = 
+    UA_CreateMonitoredItemsResponse response =
        UA_Client_MonitoredItems_createEvents(client, request, &context,
                                              &callback, &deleteCallback);
     UA_StatusCode retval = response.responseHeader.serviceResult;
@@ -689,20 +724,19 @@ ua_MonitoredItems_delete(UA_Client *client, UA_Client_Subscription *sub,
 #endif
 
     /* Loop over deleted MonitoredItems */
+    struct UA_Client_MonitoredItem_ForDelete deleteMonitoredItem = {0};
+    deleteMonitoredItem.client = client;
+    deleteMonitoredItem.sub = sub;
+
     for(size_t i = 0; i < response->resultsSize; i++) {
         if(response->results[i] != UA_STATUSCODE_GOOD &&
            response->results[i] != UA_STATUSCODE_BADMONITOREDITEMIDINVALID) {
             continue;
         }
-
+        deleteMonitoredItem.monitoredItemId = &request->monitoredItemIds[i];
         /* Delete the internal representation */
-        UA_Client_MonitoredItem *mon;
-        LIST_FOREACH(mon, &sub->monitoredItems, listEntry) {
-            if(mon->monitoredItemId == request->monitoredItemIds[i]) {
-                MonitoredItem_delete(client, sub, mon);
-                break;
-            }
-        }
+
+        ZIP_ITER(MonitorItemsTree,&sub->monitoredItems, UA_MonitoredItem_delete_wrapper, &deleteMonitoredItem);
     }
 }
 
@@ -815,6 +849,17 @@ UA_Client_MonitoredItems_deleteSingle(UA_Client *client, UA_UInt32 subscriptionI
     return retval;
 }
 
+static void
+UA_MonitoredItem_change_clientHandle(UA_Client_MonitoredItem *mon, void *data) {
+    UA_MonitoredItemModifyRequest *monitoredItemModifyRequest =
+        (UA_MonitoredItemModifyRequest *)data;
+    if(monitoredItemModifyRequest != NULL) {
+        if(mon->monitoredItemId == monitoredItemModifyRequest->monitoredItemId) {
+            monitoredItemModifyRequest->requestedParameters.clientHandle = mon->clientHandle;
+        }
+    }
+}
+
 UA_ModifyMonitoredItemsResponse
 UA_Client_MonitoredItems_modify(UA_Client *client,
                                 const UA_ModifyMonitoredItemsRequest request) {
@@ -836,19 +881,13 @@ UA_Client_MonitoredItems_modify(UA_Client *client,
     UA_ModifyMonitoredItemsRequest_copy(&request, &modifiedRequest);
 
     for (size_t i = 0; i < modifiedRequest.itemsToModifySize; ++i) {
-        UA_Client_MonitoredItem *mon;
-        LIST_FOREACH(mon, &sub->monitoredItems, listEntry) {
-            if(mon->monitoredItemId == modifiedRequest.itemsToModify[i].monitoredItemId) {
-                modifiedRequest.itemsToModify[i].requestedParameters.clientHandle = mon->clientHandle;
-                break;
-            }
-        }
+        ZIP_ITER(MonitorItemsTree, &sub->monitoredItems,
+                 UA_MonitoredItem_change_clientHandle, &modifiedRequest.itemsToModify[i]);
+
+        __UA_Client_Service(client, &modifiedRequest,
+                            &UA_TYPES[UA_TYPES_MODIFYMONITOREDITEMSREQUEST], &response,
+                            &UA_TYPES[UA_TYPES_MODIFYMONITOREDITEMSRESPONSE]);
     }
-
-    __UA_Client_Service(client,
-                        &modifiedRequest, &UA_TYPES[UA_TYPES_MODIFYMONITOREDITEMSREQUEST],
-                        &response, &UA_TYPES[UA_TYPES_MODIFYMONITOREDITEMSRESPONSE]);
-
     UA_ModifyMonitoredItemsRequest_clear(&modifiedRequest);
     return response;
 }
@@ -904,10 +943,9 @@ processDataChangeNotification(UA_Client *client, UA_Client_Subscription *sub,
 
         /* Find the MonitoredItem */
         UA_Client_MonitoredItem *mon;
-        LIST_FOREACH(mon, &sub->monitoredItems, listEntry) {
-            if(mon->clientHandle == min->clientHandle)
-                break;
-        }
+        UA_Client_MonitoredItem dummy;
+        dummy.clientHandle = min->clientHandle;
+        mon = ZIP_FIND(MonitorItemsTree, &sub->monitoredItems, &dummy);
 
         if(!mon) {
             UA_LOG_WARNING(&client->config.logger, UA_LOGCATEGORY_CLIENT,
@@ -923,9 +961,11 @@ processDataChangeNotification(UA_Client *client, UA_Client_Subscription *sub,
             continue;
         }
 
-        mon->handler.dataChangeCallback(client, sub->subscriptionId, sub->context,
-                                        mon->monitoredItemId, mon->context,
-                                        &min->value);
+        if(mon->handler.dataChangeCallback) {
+            mon->handler.dataChangeCallback(client, sub->subscriptionId, sub->context,
+                                            mon->monitoredItemId, mon->context,
+                                            &min->value);
+        }
     }
 }
 
@@ -937,10 +977,9 @@ processEventNotification(UA_Client *client, UA_Client_Subscription *sub,
 
         /* Find the MonitoredItem */
         UA_Client_MonitoredItem *mon;
-        LIST_FOREACH(mon, &sub->monitoredItems, listEntry) {
-            if(mon->clientHandle == eventFieldList->clientHandle)
-                break;
-        }
+        UA_Client_MonitoredItem dummy;
+        dummy.clientHandle = eventFieldList->clientHandle;
+        mon = ZIP_FIND(MonitorItemsTree, &sub->monitoredItems, &dummy);
 
         if(!mon) {
             UA_LOG_DEBUG(&client->config.logger, UA_LOGCATEGORY_CLIENT,
@@ -1111,12 +1150,12 @@ UA_Client_Subscriptions_processPublishResponse(UA_Client *client, UA_PublishRequ
                            "Not enough memory to store the acknowledgement for a publish "
                            "message on subscription %" PRIu32, sub->subscriptionId);
             break;
-        }   
+        }
         tmpAck->subAck.sequenceNumber = msg->sequenceNumber;
         tmpAck->subAck.subscriptionId = sub->subscriptionId;
         LIST_INSERT_HEAD(&client->pendingNotificationsAcks, tmpAck, listEntry);
         break;
-    } 
+    }
 }
 
 static void
@@ -1199,7 +1238,7 @@ UA_Client_Subscriptions_backgroundPublish(UA_Client *client) {
             UA_PublishRequest_delete(request);
             return;
         }
-    
+
         UA_UInt32 requestId;
         client->currentlyOutStandingPublishRequests++;
 

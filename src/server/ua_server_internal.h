@@ -12,6 +12,7 @@
  *    Copyright 2017 (c) Julian Grothoff
  *    Copyright 2019-2021 (c) Kalycito Infotech Private Limited
  *    Copyright 2019 (c) HMS Industrial Networks AB (Author: Jonas Green)
+ *    Copyright 2021 (c) Fraunhofer IOSB (Author: Andreas Ebner)
  */
 
 #ifndef UA_SERVER_INTERNAL_H_
@@ -99,17 +100,43 @@ typedef struct session_list_entry {
 
 typedef enum {
     UA_SERVERLIFECYCLE_FRESH,
-    UA_SERVERLIFECYLE_RUNNING
+    UA_SERVERLIFECYCLE_STOPPED,
+    UA_SERVERLIFECYCLE_STARTED,
+    UA_SERVERLIFECYCLE_STOPPING
 } UA_ServerLifecycle;
+
+typedef enum {
+    UA_SERVERCONNECTIONSTATE_FRESH,
+    UA_SERVERCONNECTIONSTATE_STOPPED,
+    UA_SERVERCONNECTIONSTATE_STARTING,
+    UA_SERVERCONNECTIONSTATE_STARTED,
+    UA_SERVERCONNECTIONSTATE_STOPPING
+} UA_ServerConnectionState;
+
+/* Maximum numbers of sockets to listen on */
+#define UA_MAXSERVERCONNECTIONS 16
+
+typedef struct {
+    UA_ServerConnectionState state;
+    uintptr_t connectionId;
+    UA_ConnectionManager *connectionManager;
+} UA_ServerConnection;
 
 struct UA_Server {
     /* Config */
     UA_ServerConfig config;
+
+    /* Runtime state */
     UA_DateTime startTime;
     UA_DateTime endTime; /* Zeroed out. If a time is set, then the server shuts
                           * down once the time has been reached */
 
     UA_ServerLifecycle state;
+    UA_ServerConnection serverConnections[UA_MAXSERVERCONNECTIONS];
+    size_t serverConnectionsSize;
+
+    UA_ConnectionConfig tcpConnectionConfig; /* Extracted from the server config
+                                              * parameters */
 
     /* SecureChannels */
     TAILQ_HEAD(, channel_entry) channels;
@@ -123,6 +150,7 @@ struct UA_Server {
     /* Session Management */
     LIST_HEAD(session_list, session_list_entry) sessions;
     UA_UInt32 sessionCount;
+    UA_UInt32 activeSessionCount;
     UA_Session adminSession; /* Local access to the services (for startup and
                               * maintenance) uses this Session with all possible
                               * access rights (Session Id: 1) */
@@ -174,7 +202,9 @@ struct UA_Server {
 #endif
 
     /* Statistics */
-    UA_ServerStatistics serverStats;
+    UA_NetworkStatistics networkStatistics;
+    UA_SecureChannelStatistics secureChannelStatistics;
+    UA_ServerDiagnosticsSummaryDataType serverDiagnosticsSummary;
 };
 
 /***********************/
@@ -182,10 +212,6 @@ struct UA_Server {
 /***********************/
 
 extern const struct aa_head refNameTree;
-
-const UA_ReferenceTarget *
-UA_NodeReferenceKind_findTarget(const UA_NodeReferenceKind *rk,
-                                const UA_ExpandedNodeId *targetId);
 
 /**************************/
 /* SecureChannel Handling */
@@ -208,8 +234,8 @@ UA_Server_configSecureChannel(void *application, UA_SecureChannel *channel,
                               const UA_AsymmetricAlgorithmSecurityHeader *asymHeader);
 
 UA_StatusCode
-sendServiceFault(UA_SecureChannel *channel, UA_UInt32 requestId, UA_UInt32 requestHandle,
-                 const UA_DataType *responseType, UA_StatusCode statusCode);
+sendServiceFault(UA_SecureChannel *channel, UA_UInt32 requestId,
+                 UA_UInt32 requestHandle, UA_StatusCode statusCode);
 
 void
 UA_Server_closeSecureChannel(UA_Server *server, UA_SecureChannel *channel,
@@ -229,6 +255,10 @@ getSecurityPolicyByUri(const UA_Server *server,
 UA_StatusCode
 getNamespaceByName(UA_Server *server, const UA_String namespaceUri,
                    size_t *foundIndex);
+
+UA_StatusCode
+getNamespaceByIndex(UA_Server *server, const size_t namespaceIndex,
+                    UA_String *foundUri);
 
 UA_StatusCode
 getBoundSession(UA_Server *server, const UA_SecureChannel *channel,
@@ -304,7 +334,7 @@ UA_StatusCode
 referenceTypeIndices(UA_Server *server, const UA_NodeId *refType,
                      UA_ReferenceTypeSet *indices, UA_Boolean includeSubtypes);
 
-/* Returns the recursive type and interface hierarchy of the node */ 
+/* Returns the recursive type and interface hierarchy of the node */
 UA_StatusCode
 getParentTypeAndInterfaceHierarchy(UA_Server *server, const UA_NodeId *typeNode,
                                    UA_NodeId **typeHierarchy, size_t *typeHierarchySize);
@@ -372,6 +402,11 @@ addNode(UA_Server *server, const UA_NodeClass nodeClass, const UA_NodeId *reques
         void *nodeContext, UA_NodeId *outNewNodeId);
 
 UA_StatusCode
+addRef(UA_Server *server, UA_Session *session, const UA_NodeId *sourceId,
+       const UA_NodeId *referenceTypeId, const UA_NodeId *targetId,
+       UA_Boolean forward);
+
+UA_StatusCode
 setVariableNode_dataSource(UA_Server *server, const UA_NodeId nodeId,
                            const UA_DataSource dataSource);
 
@@ -410,11 +445,20 @@ void monitoredItem_sampleCallback(UA_Server *server, UA_MonitoredItem *monitored
 UA_Subscription *
 UA_Server_getSubscriptionById(UA_Server *server, UA_UInt32 subscriptionId);
 
+#ifdef UA_ENABLE_SUBSCRIPTIONS_EVENTS
 UA_StatusCode
 triggerEvent(UA_Server *server, const UA_NodeId eventNodeId,
              const UA_NodeId origin, UA_ByteString *outEventId,
              const UA_Boolean deleteEventNode);
 
+/* Filters the given event with the given filter and writes the results into a
+ * notification */
+UA_StatusCode
+filterEvent(UA_Server *server, UA_Session *session,
+            const UA_NodeId *eventNode, UA_EventFilter *filter,
+            UA_EventFieldList *efl, UA_EventFilterResult *result);
+
+#endif /* UA_ENABLE_SUBSCRIPTIONS_EVENTS */
 #endif /* UA_ENABLE_SUBSCRIPTIONS */
 
 UA_BrowsePathResult
@@ -427,6 +471,9 @@ writeObjectProperty(UA_Server *server, const UA_NodeId objectId,
 
 UA_StatusCode
 getNodeContext(UA_Server *server, UA_NodeId nodeId, void **nodeContext);
+
+UA_StatusCode
+setNodeContext(UA_Server *server, UA_NodeId nodeId, void *nodeContext);
 
 void
 removeCallback(UA_Server *server, UA_UInt64 callbackId);
@@ -512,16 +559,18 @@ readValueAttribute(UA_Server *server, UA_Session *session,
 
 /* Test whether the value matches a variable definition given by
  * - datatype
- * - valueranke
+ * - valuerank
  * - array dimensions.
  * Sometimes it can be necessary to transform the content of the value, e.g.
  * byte array to bytestring or uint32 to some enum. If editableValue is non-NULL,
- * we try to create a matching variant that points to the original data. */
+ * we try to create a matching variant that points to the original data.
+ *
+ * The reason is set whenever the return value is false */
 UA_Boolean
 compatibleValue(UA_Server *server, UA_Session *session, const UA_NodeId *targetDataTypeId,
                 UA_Int32 targetValueRank, size_t targetArrayDimensionsSize,
                 const UA_UInt32 *targetArrayDimensions, const UA_Variant *value,
-                const UA_NumericRange *range);
+                const UA_NumericRange *range, const char **reason);
 
 /* Is the DataType compatible */
 UA_Boolean
@@ -610,6 +659,39 @@ UA_StatusCode UA_Server_initNS0(UA_Server *server);
 
 UA_StatusCode writeNs0VariableArray(UA_Server *server, UA_UInt32 id, void *v,
                       size_t length, const UA_DataType *type);
+
+#ifdef UA_ENABLE_DIAGNOSTICS
+void createSessionObject(UA_Server *server, UA_Session *session);
+
+void createSubscriptionObject(UA_Server *server, UA_Session *session,
+                              UA_Subscription *sub);
+
+UA_StatusCode
+readDiagnostics(UA_Server *server, const UA_NodeId *sessionId, void *sessionContext,
+                const UA_NodeId *nodeId, void *nodeContext, UA_Boolean sourceTimestamp,
+                const UA_NumericRange *range, UA_DataValue *value);
+
+UA_StatusCode
+readSubscriptionDiagnosticsArray(UA_Server *server,
+                                 const UA_NodeId *sessionId, void *sessionContext,
+                                 const UA_NodeId *nodeId, void *nodeContext,
+                                 UA_Boolean sourceTimestamp,
+                                 const UA_NumericRange *range, UA_DataValue *value);
+
+UA_StatusCode
+readSessionDiagnosticsArray(UA_Server *server,
+                            const UA_NodeId *sessionId, void *sessionContext,
+                            const UA_NodeId *nodeId, void *nodeContext,
+                            UA_Boolean sourceTimestamp,
+                            const UA_NumericRange *range, UA_DataValue *value);
+
+UA_StatusCode
+readSessionSecurityDiagnostics(UA_Server *server,
+                               const UA_NodeId *sessionId, void *sessionContext,
+                               const UA_NodeId *nodeId, void *nodeContext,
+                               UA_Boolean sourceTimestamp,
+                               const UA_NumericRange *range, UA_DataValue *value);
+#endif
 
 /***************************/
 /* Nodestore Access Macros */

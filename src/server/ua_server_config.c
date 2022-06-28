@@ -1,6 +1,6 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, You can obtain one at http://mozilla.org/MPL/2.0/. 
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  *
  *    Copyright 2019 (c) Fraunhofer IOSB (Author: Julius Pfrommer)
  *    Copyright 2019 (c) HMS Industrial Networks AB (Author: Jonas Green)
@@ -26,31 +26,27 @@ UA_ServerConfig_clean(UA_ServerConfig *config) {
 # endif
 #endif
 
-    /* Custom DataTypes */
-    /* nothing to do */
-
     /* Stop and delete the EventLoop */
-    if(config->eventLoop && !config->externalEventLoop) {
-        if(UA_EventLoop_getState(config->eventLoop) != UA_EVENTLOOPSTATE_FRESH &&
-           UA_EventLoop_getState(config->eventLoop) != UA_EVENTLOOPSTATE_STOPPED) {
-            UA_EventLoop_stop(config->eventLoop);
-            while(UA_EventLoop_getState(config->eventLoop) != UA_EVENTLOOPSTATE_STOPPED) {
-                UA_EventLoop_run(config->eventLoop, 100);
+    UA_EventLoop *el = config->eventLoop;
+    if(el && !config->externalEventLoop) {
+        if(el->state != UA_EVENTLOOPSTATE_FRESH &&
+           el->state != UA_EVENTLOOPSTATE_STOPPED) {
+            el->stop(el);
+            while(el->state != UA_EVENTLOOPSTATE_STOPPED) {
+                el->run(el, 100);
             }
         }
-        UA_EventLoop_delete(config->eventLoop);
+        el->free(el);
         config->eventLoop = NULL;
     }
 
     /* Networking */
-    for(size_t i = 0; i < config->networkLayersSize; ++i)
-        config->networkLayers[i].clear(&config->networkLayers[i]);
-    UA_free(config->networkLayers);
-    config->networkLayers = NULL;
-    config->networkLayersSize = 0;
-    UA_String_clear(&config->customHostname);
-    config->customHostname = UA_STRING_NULL;
+    UA_Array_delete(config->serverUrls, config->serverUrlsSize,
+                    &UA_TYPES[UA_TYPES_STRING]);
+    config->serverUrls = NULL;
+    config->serverUrlsSize = 0;
 
+    /* Security Policies */
     for(size_t i = 0; i < config->securityPoliciesSize; ++i) {
         UA_SecurityPolicy *policy = &config->securityPolicies[i];
         policy->clear(policy);

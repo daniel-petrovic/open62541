@@ -152,14 +152,12 @@ initUaRegisterServer(UA_RegisteredServer *requestServer) {
     requestServer->serverNames = &server->config.applicationDescription.applicationName;
     requestServer->serverNamesSize = 1;
 
-    size_t nl_discurls = server->config.networkLayersSize;
+    size_t nl_discurls = server->config.serverUrlsSize;
     requestServer->discoveryUrls = (UA_String*)UA_malloc(sizeof(UA_String) * nl_discurls);
     requestServer->discoveryUrlsSize = nl_discurls;
     for(size_t i = 0; i < nl_discurls; ++i) {
-        UA_ServerNetworkLayer *nl = &server->config.networkLayers[i];
-        requestServer->discoveryUrls[i] = nl->discoveryUrl;
+        requestServer->discoveryUrls[i] = server->config.serverUrls[i];
     }
-
 }
 
 static UA_StatusCode
@@ -410,7 +408,7 @@ subscriptionRequests(UA_Client *client) {
     ASSERT_GOOD(setPublishingModeResponse.responseHeader.serviceResult);
     UA_SetPublishingModeRequest_clear(&setPublishingModeRequest);
     UA_SetPublishingModeResponse_clear(&setPublishingModeResponse);
-    
+
 
     // createMonitoredItemsRequest
     UA_UInt32 monId;
@@ -463,7 +461,7 @@ subscriptionRequests(UA_Client *client) {
     ASSERT_GOOD(modifyMonitoredItemsResponse.responseHeader.serviceResult);
     UA_ModifyMonitoredItemsRequest_clear(&modifyMonitoredItemsRequest);
     UA_ModifyMonitoredItemsResponse_clear(&modifyMonitoredItemsResponse);
-    
+
     // setMonitoringMode
     UA_SetMonitoringModeRequest setMonitoringModeRequest;
     UA_SetMonitoringModeRequest_init(&setMonitoringModeRequest);

@@ -194,9 +194,12 @@ prependHeadersAsym(UA_SecureChannel *const channel, UA_Byte *header_pos,
                 &header_pos, &buf_end, NULL, NULL);
     UA_CHECK_STATUS(retval, return retval);
 
+    /* Increase the sequence number in the channel */
+    channel->sendSequenceNumber++;
+
     UA_SequenceHeader seqHeader;
     seqHeader.requestId = requestId;
-    seqHeader.sequenceNumber = UA_atomic_addUInt32(&channel->sendSequenceNumber, 1);
+    seqHeader.sequenceNumber = channel->sendSequenceNumber;
     retval = UA_encodeBinaryInternal(&seqHeader, &UA_TRANSPORT[UA_TRANSPORT_SEQUENCEHEADER],
                                      &header_pos, &buf_end, NULL, NULL);
     return retval;
@@ -335,10 +338,10 @@ signAndEncryptSym(UA_MessageContext *messageContext,
     /* Encrypt */
     UA_ByteString dataToEncrypt;
     dataToEncrypt.data = messageContext->messageBuffer.data +
-        UA_SECURECHANNEL_CHANNELHEADER_LENGTH + 
+        UA_SECURECHANNEL_CHANNELHEADER_LENGTH +
         UA_SECURECHANNEL_SYMMETRIC_SECURITYHEADER_LENGTH;
     dataToEncrypt.length = totalLength -
-        (UA_SECURECHANNEL_CHANNELHEADER_LENGTH + 
+        (UA_SECURECHANNEL_CHANNELHEADER_LENGTH +
          UA_SECURECHANNEL_SYMMETRIC_SECURITYHEADER_LENGTH);
     return sp->symmetricModule.cryptoModule.encryptionAlgorithm.
         encrypt(channel->channelContext, &dataToEncrypt);

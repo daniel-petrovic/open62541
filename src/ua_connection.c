@@ -18,6 +18,8 @@
 #include "ua_types_encoding_binary.h"
 #include "ua_util_internal.h"
 
+#include <open62541/plugin/eventloop.h>
+
 /* Hides some errors before sending them to a client according to the
  * standard. */
 static void
@@ -65,15 +67,41 @@ UA_Connection_sendError(UA_Connection *connection, UA_TcpErrorMessage *error) {
 
 void UA_Connection_detachSecureChannel(UA_Connection *connection) {
     UA_SecureChannel *channel = connection->channel;
-    if(channel)
-        /* only replace when the channel points to this connection */
-        UA_atomic_cmpxchg((void**)&channel->connection, connection, NULL);
-    UA_atomic_xchg((void**)&connection->channel, NULL);
+    /* only replace when the channel points to this connection */
+    if(channel && channel->connection == connection)
+        channel->connection = NULL;
+    connection->channel = NULL;
 }
 
 // TODO: Return an error code
 void
 UA_Connection_attachSecureChannel(UA_Connection *connection, UA_SecureChannel *channel) {
-    if(UA_atomic_cmpxchg((void**)&channel->connection, NULL, connection) == NULL)
-        UA_atomic_xchg((void**)&connection->channel, (void*)channel);
+    if(channel->connection == NULL) {
+        channel->connection = connection;
+        connection->channel = channel;
+    }
+}
+
+UA_StatusCode
+UA_Server_Connection_getSendBuffer(UA_Connection *connection, size_t length,
+                                   UA_ByteString *buf) {
+    UA_ConnectionManager *cm = (UA_ConnectionManager*)connection->handle;
+    return cm->allocNetworkBuffer(cm, (uintptr_t)connection->sockfd, buf, length);
+}
+
+UA_StatusCode
+UA_Server_Connection_send(UA_Connection *connection, UA_ByteString *buf) {
+    UA_ConnectionManager *cm = (UA_ConnectionManager*)connection->handle;
+    return cm->sendWithConnection(cm, (uintptr_t)connection->sockfd, 0, NULL, buf);
+}
+
+void
+UA_Server_Connection_releaseBuffer (UA_Connection *connection, UA_ByteString *buf) {
+    UA_ConnectionManager *cm = (UA_ConnectionManager*)connection->handle;
+    cm->freeNetworkBuffer(cm, (uintptr_t)connection->sockfd, buf);
+}
+
+void UA_Server_Connection_close(UA_Connection *connection) {
+    UA_ConnectionManager *cm = (UA_ConnectionManager*)connection->handle;
+    cm->closeConnection(cm, (uintptr_t)connection->sockfd);
 }

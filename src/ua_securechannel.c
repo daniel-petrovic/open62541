@@ -18,11 +18,12 @@
 #include "ua_securechannel.h"
 #include "ua_types_encoding_binary.h"
 #include "ua_util_internal.h"
+#include "server/ua_session.h"
 
 #define UA_BITMASK_MESSAGETYPE 0x00ffffffu
 #define UA_BITMASK_CHUNKTYPE 0xff000000u
 
-const UA_ByteString UA_SECURITY_POLICY_NONE_URI =
+const UA_String UA_SECURITY_POLICY_NONE_URI =
     {47, (UA_Byte *)"http://opcfoundation.org/UA/SecurityPolicy#None"};
 
 #ifdef UA_ENABLE_UNIT_TEST_FAILURE_HOOKS
@@ -109,12 +110,16 @@ UA_SecureChannel_close(UA_SecureChannel *channel) {
         UA_Connection_detachSecureChannel(channel->connection);
     }
 
-    /* Remove session pointers (not the sessions) and NULL the pointers back to
-     * the SecureChannel in the Session */
+    /* Detach Sessions from the SecureChannel. This also removes outstanding
+     * Publish requests whose RequestId is valid only for the SecureChannel. */
     UA_SessionHeader *sh;
     while((sh = SLIST_FIRST(&channel->sessions))) {
-        sh->channel = NULL;
-        SLIST_REMOVE_HEAD(&channel->sessions, next);
+        if(sh->serverSession) {
+            UA_Session_detachFromSecureChannel((UA_Session *)sh);
+        } else {
+            sh->channel = NULL;
+            SLIST_REMOVE_HEAD(&channel->sessions, next);
+        }
     }
 
     /* Delete the channel context for the security policy */
@@ -265,9 +270,12 @@ encodeHeadersSym(UA_MessageContext *mc, size_t totalLength) {
     else
         header.messageTypeAndChunkType += UA_CHUNKTYPE_INTERMEDIATE;
 
+    /* Increase the sequence number in the channel */
+    channel->sendSequenceNumber++;
+
     UA_SequenceHeader seqHeader;
     seqHeader.requestId = mc->requestId;
-    seqHeader.sequenceNumber = UA_atomic_addUInt32(&channel->sendSequenceNumber, 1);
+    seqHeader.sequenceNumber = channel->sendSequenceNumber;
 
     UA_StatusCode res = UA_STATUSCODE_GOOD;
     res |= UA_encodeBinaryInternal(&header, &UA_TRANSPORT[UA_TRANSPORT_TCPMESSAGEHEADER],
@@ -469,22 +477,24 @@ UA_SecureChannel_sendSymmetricMessage(UA_SecureChannel *channel, UA_UInt32 reque
 /* Receive and Process Messages */
 /********************************/
 
+/* Does the sequence number match? Otherwise try to rollover. See Part 6,
+ * Section 6.7.2.4 of the standard. */
+#define UA_SEQUENCENUMBER_ROLLOVER 4294966271
+
 #ifndef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
 static UA_StatusCode
 processSequenceNumberSym(UA_SecureChannel *channel, UA_UInt32 sequenceNumber) {
-    /* Failure mode hook for unit tests */
 #ifdef UA_ENABLE_UNIT_TEST_FAILURE_HOOKS
+    /* Failure mode hook for unit tests */
     if(processSym_seqNumberFailure != UA_STATUSCODE_GOOD)
         return processSym_seqNumberFailure;
 #endif
 
-    /* Does the sequence number match? */
     if(sequenceNumber != channel->receiveSequenceNumber + 1) {
-        /* FIXME: Remove magic numbers :( */
-        if(channel->receiveSequenceNumber + 1 > 4294966271 && sequenceNumber < 1024)
-            channel->receiveSequenceNumber = sequenceNumber - 1; /* Roll over */
-        else
+        if(channel->receiveSequenceNumber + 1 <= UA_SEQUENCENUMBER_ROLLOVER ||
+           sequenceNumber >= 1024)
             return UA_STATUSCODE_BADSECURITYCHECKSFAILED;
+        channel->receiveSequenceNumber = sequenceNumber - 1; /* Roll over */
     }
     ++channel->receiveSequenceNumber;
     return UA_STATUSCODE_GOOD;
@@ -655,7 +665,7 @@ assembleProcessMessage(UA_SecureChannel *channel, void *application,
     UA_ByteString payload;
     res = UA_ByteString_allocBuffer(&payload, messageSize);
     UA_CHECK_STATUS(res, return res);
-    
+
     /* Assemble the full message */
     size_t offset = 0;
     while(true) {
@@ -668,7 +678,7 @@ assembleProcessMessage(UA_SecureChannel *channel, void *application,
         if(ct == UA_CHUNKTYPE_FINAL)
             break;
     }
-    
+
     /* Process the assembled message */
     res = callback(application, channel, messageType, requestId, &payload);
     UA_ByteString_clear(&payload);
@@ -905,7 +915,7 @@ UA_SecureChannel_receive(UA_SecureChannel *channel, void *application,
                          UA_ProcessMessageCallback callback, UA_UInt32 timeout) {
     UA_Connection *connection = channel->connection;
     UA_CHECK_MEM(connection, return UA_STATUSCODE_BADINTERNALERROR);
-    
+
     /* Listen for messages to arrive */
     UA_ByteString buffer = UA_BYTESTRING_NULL;
     UA_StatusCode res = connection->recv(connection, &buffer, timeout);

@@ -12,7 +12,7 @@
 ###    Copyright 2018 (c) Jannis Volker
 ###    Copyright 2018 (c) Ralph Lange
 
-from datatypes import  ExtensionObject, NodeId, StatusCode, DiagnosticInfo, Guid, Value
+from datatypes import  ExtensionObject, NodeId, StatusCode, DiagnosticInfo, Value
 from nodes import ReferenceTypeNode, ObjectNode, VariableNode, VariableTypeNode, MethodNode, ObjectTypeNode, DataTypeNode, ViewNode
 from backend_open62541_datatypes import makeCIdentifier, generateLocalizedTextCode, generateQualifiedNameCode, generateNodeIdCode, \
     generateExpandedNodeIdCode, generateNodeValueCode
@@ -20,6 +20,7 @@ import re
 import logging
 
 import sys
+
 if sys.version_info[0] >= 3:
     # strings are already parsed to unicode
     def unicode(s):
@@ -43,16 +44,15 @@ def generateNodeValueInstanceName(node, parent, arrayIndex):
     return generateNodeIdPrintable(parent) + "_" + str(node.alias) + "_" + str(arrayIndex)
 
 def generateReferenceCode(reference):
-    if reference.isForward:
-        return "retVal |= UA_Server_addReference(server, %s, %s, %s, true);" % \
-               (generateNodeIdCode(reference.source),
-                generateNodeIdCode(reference.referenceType),
-                generateExpandedNodeIdCode(reference.target))
-    else:
-        return "retVal |= UA_Server_addReference(server, %s, %s, %s, false);" % \
-               (generateNodeIdCode(reference.source),
-                generateNodeIdCode(reference.referenceType),
-                generateExpandedNodeIdCode(reference.target))
+    code = []
+    forwardFlag = "true" if reference.isForward else "false"
+    code.append("retVal |= UA_Server_addReference(server, %s, %s, %s, %s);" %
+                (generateNodeIdCode(reference.source),
+                 generateNodeIdCode(reference.referenceType),
+                 generateExpandedNodeIdCode(reference.target),
+                 forwardFlag))
+    code.append("if (retVal != UA_STATUSCODE_GOOD) return retVal;")
+    return "\n".join(code)
 
 def generateReferenceTypeNodeCode(node):
     code = []
@@ -305,6 +305,7 @@ def generateExtensionObjectSubtypeCode(node, parent, nodeset, global_var_code, i
         if subv is None:
             continue
         encField = node.encodingRule[idx].name
+        encRule = node.encodingRule[idx]
         memberName = makeCIdentifier(lowerFirstChar(encField))
 
         # Check if this is an array
@@ -331,16 +332,11 @@ def generateExtensionObjectSubtypeCode(node, parent, nodeset, global_var_code, i
             continue
 
         logger.debug("Encoding of field " + memberName + " is " + str(subv.encodingRule) + "defined by " + str(encField))
-        if subv.valueRank is None or subv.valueRank == 0:
-            if not subv.isNone():
-                # Some values can be optional
-                valueName = instanceName + accessor + memberName
-                code.append(generateNodeValueCode(valueName,
-                            subv, instanceName,valueName, global_var_code, asIndirect=False, nodeset=nodeset))
-        else:
-            memberName = makeCIdentifier(lowerFirstChar(encField))
-            code.append(generateNodeValueCode(instanceName + accessor + memberName + "Size", subv,
-                                              instanceName,valueName, global_var_code, asIndirect=False))
+        if not subv.isNone():
+            # Some values can be optional
+            valueName = instanceName + accessor + memberName
+            code.append(generateNodeValueCode(valueName,
+                        subv, instanceName,valueName, global_var_code, asIndirect=False, nodeset=nodeset, encRule=encRule))
 
     if not isArrayElement:
         code.append("UA_Variant_setScalar(&attr.value, " + instanceName + ", &" + typeArrayString + ");")
@@ -397,9 +393,7 @@ def generateValueCode(node, parentNode, nodeset, bootstrapping=True):
 
     if isArrayVariableNode(node, parentNode):
         # User the following strategy for all directly mappable values a la 'UA_Type MyInt = (UA_Type) 23;'
-        if isinstance(node.value[0], Guid):
-            logger.warn("Don't know how to print array of GUID in node " + str(parentNode.id))
-        elif isinstance(node.value[0], DiagnosticInfo):
+        if isinstance(node.value[0], DiagnosticInfo):
             logger.warn("Don't know how to print array of DiagnosticInfo in node " + str(parentNode.id))
         elif isinstance(node.value[0], StatusCode):
             logger.warn("Don't know how to print array of StatusCode in node " + str(parentNode.id))
@@ -426,9 +420,7 @@ def generateValueCode(node, parentNode, nodeset, bootstrapping=True):
     #scalar value
     else:
         # User the following strategy for all directly mappable values a la 'UA_Type MyInt = (UA_Type) 23;'
-        if isinstance(node.value[0], Guid):
-            logger.warn("Don't know how to print scalar GUID in node " + str(parentNode.id))
-        elif isinstance(node.value[0], DiagnosticInfo):
+        if isinstance(node.value[0], DiagnosticInfo):
             logger.warn("Don't know how to print scalar DiagnosticInfo in node " + str(parentNode.id))
         elif isinstance(node.value[0], StatusCode):
             logger.warn("Don't know how to print scalar StatusCode in node " + str(parentNode.id))
@@ -548,6 +540,7 @@ def generateNodeCode_begin(node, nodeset, code_global):
         code.append(" UA_NODEID_NULL,")
     code.append("(const UA_NodeAttributes*)&attr, &UA_TYPES[UA_TYPES_{}ATTRIBUTES],NULL, NULL);".
             format(makeCIdentifier(node.__class__.__name__.upper().replace("NODE" ,""))))
+    code.append("if (retVal != UA_STATUSCODE_GOOD) return retVal;")
     code.extend(codeCleanup)
 
     return "\n".join(code)

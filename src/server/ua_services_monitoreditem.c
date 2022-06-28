@@ -1,6 +1,6 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, You can obtain one at http://mozilla.org/MPL/2.0/. 
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  *
  *    Copyright 2014-2018 (c) Fraunhofer IOSB (Author: Julius Pfrommer)
  *    Copyright 2016-2017 (c) Florian Palm
@@ -42,7 +42,7 @@ setAbsoluteFromPercentageDeadband(UA_Server *server, UA_Session *session,
         browseSimplifiedBrowsePath(server, mon->itemToMonitor.nodeId, 1, &qn);
     if(bpr.statusCode != UA_STATUSCODE_GOOD || bpr.targetsSize < 1) {
         UA_BrowsePathResult_clear(&bpr);
-        return UA_STATUSCODE_BADMONITOREDITEMFILTERUNSUPPORTED;
+        return UA_STATUSCODE_BADFILTERNOTALLOWED;
     }
 
     /* Read the range */
@@ -56,7 +56,7 @@ setAbsoluteFromPercentageDeadband(UA_Server *server, UA_Session *session,
     if(!UA_Variant_isScalar(&rangeVal.value) ||
        rangeVal.value.type != &UA_TYPES[UA_TYPES_RANGE]) {
         UA_DataValue_clear(&rangeVal);
-        return UA_STATUSCODE_BADMONITOREDITEMFILTERUNSUPPORTED;
+        return UA_STATUSCODE_BADFILTERNOTALLOWED;
     }
 
     /* Compute the abs deadband */
@@ -67,7 +67,8 @@ setAbsoluteFromPercentageDeadband(UA_Server *server, UA_Session *session,
 
     /* EURange invalid or NaN? */
     if(absDeadband < 0.0 || absDeadband != absDeadband) {
-        return UA_STATUSCODE_BADMONITOREDITEMFILTERUNSUPPORTED;
+        UA_DataValue_clear(&rangeVal);
+        return UA_STATUSCODE_BADFILTERNOTALLOWED;
     }
 
     /* Adjust the original filter */
@@ -95,7 +96,7 @@ Service_SetTriggering(UA_Server *server, UA_Session *session,
         response->responseHeader.serviceResult = UA_STATUSCODE_BADSUBSCRIPTIONIDINVALID;
         return;
     }
-    
+
     /* Get the MonitoredItem */
     UA_MonitoredItem *mon = UA_Subscription_getMonitoredItem(sub, request->triggeringItemId);
     if(!mon) {
@@ -170,7 +171,7 @@ checkAdjustMonitoredItemParams(UA_Server *server, UA_Session *session,
          * DataChangeFilter */
         if(params->filter.encoding != UA_EXTENSIONOBJECT_ENCODED_NOBODY &&
            params->filter.content.decoded.type != &UA_TYPES[UA_TYPES_DATACHANGEFILTER])
-            return UA_STATUSCODE_BADMONITOREDITEMFILTERUNSUPPORTED;
+            return UA_STATUSCODE_BADFILTERNOTALLOWED;
 
         /* Check the deadband and adjust if necessary. */
         if(params->filter.content.decoded.type == &UA_TYPES[UA_TYPES_DATACHANGEFILTER]) {
@@ -216,7 +217,7 @@ checkAdjustMonitoredItemParams(UA_Server *server, UA_Session *session,
             UA_NODESTORE_RELEASE(server, node);
         }
     }
-        
+
     /* Adjust to sampling interval to lie within the limits */
     if(params->samplingInterval <= 0.0) {
         /* A sampling interval of zero is possible and indicates that the
@@ -287,6 +288,7 @@ checkEventFilterParam(UA_Server *server, UA_Session *session,
                 return whereResult;
             }
         }
+        UA_ContentFilterResult_clear(&contentFilterResult);
     }
     //check the select clause for logical consistency
     UA_StatusCode selectClauseValidationResult[128];
@@ -457,6 +459,10 @@ Operation_CreateMonitoredItem(UA_Server *server, UA_Session *session,
         return;
     }
 
+    /* Initialize the value status so the first sample always passes the filter */
+    newMon->lastValue.hasStatus = true;
+    newMon->lastValue.status = ~(UA_StatusCode)0;
+
     /* Register the Monitoreditem in the server and subscription */
     UA_Server_registerMonitoredItem(server, newMon);
 
@@ -476,10 +482,10 @@ Operation_CreateMonitoredItem(UA_Server *server, UA_Session *session,
     UA_LOG_INFO_SUBSCRIPTION(&server->config.logger, cmc->sub,
                              "MonitoredItem %" PRIi32 " | "
                              "Created the MonitoredItem "
-                             "(Sampling Interval: %fms, Queue Size: %lu)",
+                             "(Sampling Interval: %.2fms, Queue Size: %lu)",
                              newMon->monitoredItemId,
                              newMon->parameters.samplingInterval,
-                             (unsigned long)newMon->queueSize);
+                             (unsigned long)newMon->parameters.queueSize);
 }
 
 void

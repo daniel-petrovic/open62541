@@ -2,25 +2,28 @@
  * See http://creativecommons.org/publicdomain/zero/1.0/ for more information. */
 
 /**
- * .. _pubsub-tutorial:
+ * .. _pubsub-nodeset-tutorial:
  *
  * Publisher Realtime example using custom nodes
  * ---------------------------------------------
  *
  * The purpose of this example file is to use the custom nodes of the XML
- * file(pubDataModel.xml) for publisher.
- * This Publisher example uses the two custom nodes (PublisherCounterVariable and Pressure)
- * created using the XML file(pubDataModel.xml) for publishing the packet.
- * The pubDataModel.csv will contain the nodeids of custom nodes(object and variables) and
- * the nodeids of the custom nodes are harcoded inside the addDataSetField API.
- * This example uses two threads namely the Publisher and UserApplication. The Publisher thread is used to publish data at every cycle.
- * The UserApplication thread serves the functionality of the Control loop, which increments the counterdata to be published
- * by the Publisher and also writes the published data in a csv along with transmission timestamp.
+ * file(pubDataModel.xml) for publisher. This Publisher example uses the two
+ * custom nodes (PublisherCounterVariable and Pressure) created using the XML
+ * file(pubDataModel.xml) for publishing the packet. The pubDataModel.csv will
+ * contain the nodeids of custom nodes(object and variables) and the nodeids of
+ * the custom nodes are harcoded inside the addDataSetField API. This example
+ * uses two threads namely the Publisher and UserApplication. The Publisher
+ * thread is used to publish data at every cycle. The UserApplication thread
+ * serves the functionality of the Control loop, which increments the
+ * counterdata to be published by the Publisher and also writes the published
+ * data in a csv along with transmission timestamp.
  *
  * Run steps of the Publisher application as mentioned below:
  *
- * ./bin/examples/pubsub_nodeset_rt_publisher -i <iface>
- * For more information run ./bin/examples/pubsub_nodeset_rt_publisher -h */
+ * ``./bin/examples/pubsub_nodeset_rt_publisher -i <iface>``
+ *
+ * For more information run ``./bin/examples/pubsub_nodeset_rt_publisher -h``. */
 
 #define _GNU_SOURCE
 
@@ -292,7 +295,7 @@ addPublishedDataSet(UA_Server *server) {
 /* This example only uses two addDataSetField which uses the custom nodes of the XML file
  * (pubDataModel.xml) */
 static void
-addDataSetField(UA_Server *server) {
+_addDataSetField(UA_Server *server) {
     UA_NodeId dataSetFieldIdent;
     UA_DataSetFieldConfig dsfConfig;
     memset(&dsfConfig, 0, sizeof(UA_DataSetFieldConfig));
@@ -680,7 +683,7 @@ int main(int argc, char **argv) {
 
     addPubSubConnection(server, &networkAddressUrlPub);
     addPublishedDataSet(server);
-    addDataSetField(server);
+    _addDataSetField(server);
     addWriterGroup(server);
     addDataSetWriter(server);
     UA_Server_freezeWriterGroupConfiguration(server, writerGroupIdent);

@@ -1,6 +1,6 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, You can obtain one at http://mozilla.org/MPL/2.0/. 
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  *
  *    Copyright 2014-2020 (c) Fraunhofer IOSB (Author: Julius Pfrommer)
  *    Copyright 2017 (c) Florian Palm
@@ -67,6 +67,7 @@ extern UA_StatusCode processSym_seqNumberFailure;
 typedef struct UA_SessionHeader {
     SLIST_ENTRY(UA_SessionHeader) next;
     UA_NodeId authenticationToken;
+    UA_Boolean serverSession; /* Disambiguate client and server session */
     UA_SecureChannel *channel; /* The pointer back to the SecureChannel in the session. */
 } UA_SessionHeader;
 

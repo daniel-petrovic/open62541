@@ -49,10 +49,6 @@ const UA_Byte DS_MESSAGEHEADER_PICOSECONDS_INCLUDED_MASK = 32;
 const UA_Byte NM_SHIFT_LEN = 2;
 const UA_Byte DS_MH_SHIFT_LEN = 1;
 
-/* Static memory allocation for the message nonce */
-#define MESSAGE_NONCE_LENGTH      8
-static UA_Byte MessageNonceGenerated[MESSAGE_NONCE_LENGTH];
-
 static UA_Boolean UA_NetworkMessage_ExtendedFlags1Enabled(const UA_NetworkMessage* src);
 static UA_Boolean UA_NetworkMessage_ExtendedFlags2Enabled(const UA_NetworkMessage* src);
 static UA_Boolean UA_DataSetMessageHeader_DataSetFlags2Enabled(const UA_DataSetMessageHeader* src);
@@ -68,6 +64,11 @@ UA_NetworkMessage_updateBufferedMessage(UA_NetworkMessageOffsetBuffer *buffer){
             case UA_PUBSUB_OFFSETTYPE_DATASETMESSAGE_SEQUENCENUMBER:
             case UA_PUBSUB_OFFSETTYPE_NETWORKMESSAGE_SEQUENCENUMBER:
                 rv = UA_UInt16_encodeBinary((UA_UInt16 *)nmo->offsetData.value.value->value.data, &bufPos, bufEnd);
+                if(*((UA_UInt16 *)nmo->offsetData.value.value->value.data) < UA_UINT16_MAX){
+                    (*((UA_UInt16 *)nmo->offsetData.value.value->value.data))++;
+                } else {
+                    (*((UA_UInt16 *)nmo->offsetData.value.value->value.data)) = 0;
+                }
                 break;
             case UA_PUBSUB_OFFSETTYPE_PAYLOAD_DATAVALUE:
                 rv = UA_DataValue_encodeBinary(nmo->offsetData.value.value,
@@ -138,6 +139,10 @@ UA_NetworkMessage_updateBufferedNwMessage(UA_NetworkMessageOffsetBuffer *buffer,
             break;
         case UA_PUBSUB_OFFSETTYPE_NETWORKMESSAGE_SEQUENCENUMBER:
             rv = UA_UInt16_decodeBinary(src, &offset, &buffer->nm->groupHeader.sequenceNumber);
+            UA_CHECK_STATUS(rv, return rv);
+            break;
+        case UA_PUBSUB_OFFSETTYPE_DATASETMESSAGE_SEQUENCENUMBER:
+            rv = UA_UInt16_decodeBinary(src, &offset, &(dsm->header.dataSetMessageSequenceNr));
             UA_CHECK_STATUS(rv, return rv);
             break;
         case UA_PUBSUB_OFFSETTYPE_PAYLOAD_DATAVALUE:
@@ -220,7 +225,7 @@ UA_NetworkMessageHeader_encodeBinary(const UA_NetworkMessage *src, UA_Byte **buf
         UA_CHECK_STATUS(rv, return rv);
 
         // ExtendedFlags2
-        if(UA_NetworkMessage_ExtendedFlags2Enabled(src)) { 
+        if(UA_NetworkMessage_ExtendedFlags2Enabled(src)) {
             v = (UA_Byte)src->networkMessageType;
             // shift left 2 bit
             v = (UA_Byte) (v << NM_SHIFT_LEN);
@@ -395,13 +400,15 @@ UA_SecurityHeader_encodeBinary(const UA_NetworkMessage* src, UA_Byte **bufPos,
     // SecurityTokenId
     rv = UA_UInt32_encodeBinary(&src->securityHeader.securityTokenId, bufPos, bufEnd);
     UA_CHECK_STATUS(rv, return rv);
+
     // NonceLength
-    UA_Byte nonceLength = (UA_Byte)src->securityHeader.messageNonce.length;
+    UA_Byte nonceLength = (UA_Byte)src->securityHeader.messageNonceSize;
     rv = UA_Byte_encodeBinary(&nonceLength, bufPos, bufEnd);
     UA_CHECK_STATUS(rv, return rv);
+
     // MessageNonce
-    for (size_t i = 0; i < src->securityHeader.messageNonce.length; i++) {
-        rv = UA_Byte_encodeBinary(&src->securityHeader.messageNonce.data[i],
+    for(size_t i = 0; i < src->securityHeader.messageNonceSize; i++) {
+        rv = UA_Byte_encodeBinary(&src->securityHeader.messageNonce[i],
                                   bufPos, bufEnd);
         UA_CHECK_STATUS(rv, return rv);
     }
@@ -455,7 +462,7 @@ UA_NetworkMessage_encodePayload(const UA_NetworkMessage* src, UA_Byte **bufPos,
     // Payload
     if(src->networkMessageType != UA_NETWORKMESSAGE_DATASET)
         return UA_STATUSCODE_BADNOTIMPLEMENTED;
-        
+
     UA_Byte count = 1;
 
     if(src->payloadHeaderEnabled) {
@@ -727,8 +734,9 @@ UA_ExtendedNetworkMessageHeader_decodeBinary(const UA_ByteString *src, size_t *o
     return UA_STATUSCODE_GOOD;
 
 error:
-    if (dst->promotedFields) {
+    if(dst->promotedFields) {
         UA_free(dst->promotedFields);
+        dst->promotedFields = NULL;
     }
     return rv;
 }
@@ -758,23 +766,21 @@ UA_SecurityHeader_decodeBinary(const UA_ByteString *src, size_t *offset,
     rv = UA_UInt32_decodeBinary(src, offset, &dst->securityHeader.securityTokenId);
     UA_CHECK_STATUS(rv, return rv);
 
-    // NonceLength
+    // MessageNonce
     UA_Byte nonceLength;
     rv = UA_Byte_decodeBinary(src, offset, &nonceLength);
     UA_CHECK_STATUS(rv, return rv);
-
-    // MessageNonce
+    if(nonceLength > UA_NETWORKMESSAGE_MAX_NONCE_LENGTH)
+        return UA_STATUSCODE_BADSECURITYCHECKSFAILED;
     if(nonceLength > 0) {
-        //TODO: check for memory leaks
-        dst->securityHeader.messageNonce.length = MESSAGE_NONCE_LENGTH;
-        dst->securityHeader.messageNonce.data = MessageNonceGenerated;
-        UA_CHECK_STATUS(rv, return rv);
-        for (UA_Byte i = 0; i < nonceLength; i++) {
+        dst->securityHeader.messageNonceSize = nonceLength;
+        for(UA_Byte i = 0; i < nonceLength; i++) {
             rv = UA_Byte_decodeBinary(src, offset,
-                                      &dst->securityHeader.messageNonce.data[i]);
+                                      &dst->securityHeader.messageNonce[i]);
             UA_CHECK_STATUS(rv, return rv);
         }
     }
+
     // SecurityFooterSize
     if(dst->securityHeader.securityFooterEnabled) {
         rv = UA_UInt16_decodeBinary(src, offset, &dst->securityHeader.securityFooterSize);
@@ -836,18 +842,18 @@ UA_NetworkMessage_decodePayload(const UA_ByteString *src, size_t *offset, UA_Net
     UA_CHECK_MEM(dst->payload.dataSetPayload.dataSetMessages,
                  return UA_STATUSCODE_BADOUTOFMEMORY);
 
-    for(UA_Byte i = 0; i < count; i++) {
-        if(&dst->payload.dataSetPayload.sizes[i] == NULL){
-            rv = UA_DataSetMessage_decodeBinary(src, offset,
-                                                &(dst->payload.dataSetPayload.dataSetMessages[i]),
-                                                0);
-        } else {
+    if(count == 1)
+        rv = UA_DataSetMessage_decodeBinary(src, offset,
+                                            &(dst->payload.dataSetPayload.dataSetMessages[0]),
+                                            0);
+    else {
+        for(UA_Byte i = 0; i < count; i++) {
             rv = UA_DataSetMessage_decodeBinary(src, offset,
                                                 &(dst->payload.dataSetPayload.dataSetMessages[i]),
                                                 dst->payload.dataSetPayload.sizes[i]);
         }
-        UA_CHECK_STATUS(rv, return rv);
     }
+    UA_CHECK_STATUS(rv, return rv);
 
     return UA_STATUSCODE_GOOD;
 
@@ -926,7 +932,8 @@ increaseOffsetArray(UA_NetworkMessageOffsetBuffer *offsetBuffer) {
 }
 
 size_t
-UA_NetworkMessage_calcSizeBinary(UA_NetworkMessage *p, UA_NetworkMessageOffsetBuffer *offsetBuffer) {
+UA_NetworkMessage_calcSizeBinary(UA_NetworkMessage *p,
+                                 UA_NetworkMessageOffsetBuffer *offsetBuffer) {
     size_t retval = 0;
     UA_Byte byte = 0;
     size_t size = UA_Byte_calcSizeBinary(&byte); // UADPVersion + UADPFlags
@@ -1002,7 +1009,7 @@ UA_NetworkMessage_calcSizeBinary(UA_NetworkMessage *p, UA_NetworkMessageOffsetBu
                 offsetBuffer->offsets[pos].offset = size;
                 offsetBuffer->offsets[pos].offsetData.value.value = UA_DataValue_new();
                 UA_DataValue_init(offsetBuffer->offsets[pos].offsetData.value.value);
-                UA_Variant_setScalar(&offsetBuffer->offsets[pos].offsetData.value.value->value,
+                UA_Variant_setScalarCopy(&offsetBuffer->offsets[pos].offsetData.value.value->value,
                                      &p->groupHeader.sequenceNumber, &UA_TYPES[UA_TYPES_UINT16]);
                 offsetBuffer->offsets[pos].contentType = UA_PUBSUB_OFFSETTYPE_NETWORKMESSAGE_SEQUENCENUMBER;
             }
@@ -1019,7 +1026,6 @@ UA_NetworkMessage_calcSizeBinary(UA_NetworkMessage *p, UA_NetworkMessageOffsetBu
                     size_t pos = offsetBuffer->offsetsSize;
                     if(!increaseOffsetArray(offsetBuffer))
                         return 0;
-
                     offsetBuffer->offsets[pos].offset = size;
                     offsetBuffer->offsets[pos].contentType = UA_PUBSUB_OFFSETTYPE_DATASETWRITERID;
                 }
@@ -1065,7 +1071,7 @@ UA_NetworkMessage_calcSizeBinary(UA_NetworkMessage *p, UA_NetworkMessageOffsetBu
         size += UA_Byte_calcSizeBinary(&byte);
         size += UA_UInt32_calcSizeBinary(&p->securityHeader.securityTokenId);
         size += 1; /* UA_Byte_calcSizeBinary(&p->securityHeader.nonceLength); */
-        size += p->securityHeader.messageNonce.length;
+        size += p->securityHeader.messageNonceSize;
         if(p->securityHeader.securityFooterEnabled)
             size += UA_UInt16_calcSizeBinary(&p->securityHeader.securityFooterSize);
     }
@@ -1097,59 +1103,46 @@ UA_NetworkMessage_calcSizeBinary(UA_NetworkMessage *p, UA_NetworkMessageOffsetBu
 
 void
 UA_NetworkMessage_clear(UA_NetworkMessage* p) {
-    if(p->promotedFieldsEnabled)
-        UA_Array_delete(p->promotedFields, p->promotedFieldsSize, &UA_TYPES[UA_TYPES_VARIANT]);
+    if(p->promotedFieldsEnabled) {
+        UA_Array_delete(p->promotedFields, p->promotedFieldsSize,
+                        &UA_TYPES[UA_TYPES_VARIANT]);
+    }
 
     if(p->networkMessageType == UA_NETWORKMESSAGE_DATASET) {
-        if(p->payloadHeaderEnabled) {
-            if(p->payloadHeader.dataSetPayloadHeader.dataSetWriterIds != NULL) {
-                UA_Array_delete(p->payloadHeader.dataSetPayloadHeader.dataSetWriterIds,
-                                p->payloadHeader.dataSetPayloadHeader.count, &UA_TYPES[UA_TYPES_UINT16]);
-            }
-            if(p->payload.dataSetPayload.sizes != NULL) { 
-                UA_Array_delete(p->payload.dataSetPayload.sizes,
-                                p->payloadHeader.dataSetPayloadHeader.count, &UA_TYPES[UA_TYPES_UINT16]);
-            }
-        }
+        if(p->payloadHeader.dataSetPayloadHeader.dataSetWriterIds)
+            UA_free(p->payloadHeader.dataSetPayloadHeader.dataSetWriterIds);
+
+        if(p->payload.dataSetPayload.sizes)
+            UA_free(p->payload.dataSetPayload.sizes);
 
         if(p->payload.dataSetPayload.dataSetMessages) {
             UA_Byte count = 1;
             if(p->payloadHeaderEnabled)
                 count = p->payloadHeader.dataSetPayloadHeader.count;
-            
             for(size_t i = 0; i < count; i++)
-                UA_DataSetMessage_clear(&(p->payload.dataSetPayload.dataSetMessages[i]));
-
+                UA_DataSetMessage_clear(&p->payload.dataSetPayload.dataSetMessages[i]);
             UA_free(p->payload.dataSetPayload.dataSetMessages);
         }
     }
 
-    if(p->securityHeader.securityFooterEnabled && (p->securityHeader.securityFooterSize > 0))
-        UA_ByteString_clear(&p->securityFooter);
+    UA_ByteString_clear(&p->securityFooter);
+    UA_String_clear(&p->messageId);
 
-    if(p->messageIdEnabled){
-           UA_String_clear(&p->messageId);
-    }
-
-    if(p->publisherIdEnabled && p->publisherIdType == UA_PUBLISHERDATATYPE_STRING){
+    if(p->publisherIdEnabled &&
+       p->publisherIdType == UA_PUBLISHERDATATYPE_STRING)
        UA_String_clear(&p->publisherId.publisherIdString);
-    }
 
     memset(p, 0, sizeof(UA_NetworkMessage));
-}
-
-void UA_NetworkMessage_delete(UA_NetworkMessage* p) {
-    UA_NetworkMessage_clear(p);
 }
 
 UA_Boolean
 UA_NetworkMessage_ExtendedFlags1Enabled(const UA_NetworkMessage* src) {
     UA_Boolean retval = false;
 
-    if((src->publisherIdType != UA_PUBLISHERDATATYPE_BYTE) 
-        || src->dataSetClassIdEnabled 
-        || src->securityEnabled 
-        || src->timestampEnabled 
+    if((src->publisherIdType != UA_PUBLISHERDATATYPE_BYTE)
+        || src->dataSetClassIdEnabled
+        || src->securityEnabled
+        || src->timestampEnabled
         || src->picosecondsEnabled
         || UA_NetworkMessage_ExtendedFlags2Enabled(src))
     {
@@ -1179,7 +1172,7 @@ UA_StatusCode
 UA_DataSetMessageHeader_encodeBinary(const UA_DataSetMessageHeader* src, UA_Byte **bufPos,
                                      const UA_Byte *bufEnd) {
     UA_Byte v;
-    // DataSetFlags1 
+    // DataSetFlags1
     v = (UA_Byte)src->fieldEncoding;
     // shift left 1 bit
     v = (UA_Byte)(v << DS_MH_SHIFT_LEN);
@@ -1220,7 +1213,7 @@ UA_DataSetMessageHeader_encodeBinary(const UA_DataSetMessageHeader* src, UA_Byte
     }
 
     // DataSetMessageSequenceNr
-    if(src->dataSetMessageSequenceNrEnabled) { 
+    if(src->dataSetMessageSequenceNrEnabled) {
         rv = UA_UInt16_encodeBinary(&src->dataSetMessageSequenceNr, bufPos, bufEnd);
         UA_CHECK_STATUS(rv, return rv);
     }
@@ -1270,7 +1263,11 @@ UA_NetworkMessage_signEncrypt(UA_NetworkMessage *nm, UA_MessageSecurityMode secu
     /* Encrypt the payload */
     if(securityMode == UA_MESSAGESECURITYMODE_SIGNANDENCRYPT) {
         /* Set the temporary MessageNonce in the SecurityPolicy */
-        res = policy->setMessageNonce(policyContext, &nm->securityHeader.messageNonce);
+        const UA_ByteString nonce = {
+            (size_t)nm->securityHeader.messageNonceSize,
+            nm->securityHeader.messageNonce
+        };
+        res = policy->setMessageNonce(policyContext, &nonce);
         UA_CHECK_STATUS(res, return res);
 
         /* The encryption is done in-place, no need to encode again */
@@ -1310,7 +1307,7 @@ UA_DataSetMessageHeader_decodeBinary(const UA_ByteString *src, size_t *offset,
     UA_Byte v2 = v & DS_MESSAGEHEADER_FIELD_ENCODING_MASK;
     v2 = (UA_Byte)(v2 >> DS_MH_SHIFT_LEN);
     dst->fieldEncoding = (UA_FieldEncoding)v2;
-    
+
     if((v & DS_MESSAGEHEADER_DS_MSG_VALID) != 0)
         dst->dataSetMessageValid = true;
 
@@ -1422,6 +1419,11 @@ UA_DataSetMessage_encodeBinary(const UA_DataSetMessage* src, UA_Byte **bufPos,
     UA_StatusCode rv = UA_DataSetMessageHeader_encodeBinary(&src->header, bufPos, bufEnd);
     UA_CHECK_STATUS(rv, return rv);
 
+    if(src->data.keyFrameData.fieldCount == 0) {
+        /* Heartbeat: "DataSetMessage is a key frame that only contains header information" */
+        return rv;
+    }
+
     if(src->header.dataSetMessageType == UA_DATASETMESSAGE_DATAKEYFRAME) {
         if(src->header.fieldEncoding != UA_FIELDENCODING_RAWDATA) {
             rv = UA_UInt16_encodeBinary(&(src->data.keyFrameData.fieldCount), bufPos, bufEnd);
@@ -1486,6 +1488,11 @@ UA_DataSetMessage_decodeBinary(const UA_ByteString *src, size_t *offset, UA_Data
     UA_CHECK_STATUS(rv, return rv);
 
     if(dst->header.dataSetMessageType == UA_DATASETMESSAGE_DATAKEYFRAME) {
+        if(*offset == src->length) {
+            /* Messages ends after the header --> Heartbeat */
+            return rv;
+        }
+
         switch(dst->header.fieldEncoding) {
             case UA_FIELDENCODING_VARIANT:
             {
@@ -1608,7 +1615,7 @@ UA_DataSetMessage_calcSizeBinary(UA_DataSetMessage* p, UA_NetworkMessageOffsetBu
             offsetBuffer->offsets[pos].offset = size;
             offsetBuffer->offsets[pos].offsetData.value.value = UA_DataValue_new();
             UA_DataValue_init(offsetBuffer->offsets[pos].offsetData.value.value);
-            UA_Variant_setScalar(&offsetBuffer->offsets[pos].offsetData.value.value->value,
+            UA_Variant_setScalarCopy(&offsetBuffer->offsets[pos].offsetData.value.value->value,
                                  &p->header.dataSetMessageSequenceNr, &UA_TYPES[UA_TYPES_UINT16]);
             offsetBuffer->offsets[pos].contentType = UA_PUBSUB_OFFSETTYPE_DATASETMESSAGE_SEQUENCENUMBER;
         }
@@ -1630,7 +1637,8 @@ UA_DataSetMessage_calcSizeBinary(UA_DataSetMessage* p, UA_NetworkMessageOffsetBu
     if(p->header.configVersionMinorVersionEnabled)
         size += UA_UInt32_calcSizeBinary(&p->header.configVersionMinorVersion);
 
-    if(p->header.dataSetMessageType == UA_DATASETMESSAGE_DATAKEYFRAME) {
+    /* Keyframe with no fields is a heartbeat, stop counting then */
+    if(p->header.dataSetMessageType == UA_DATASETMESSAGE_DATAKEYFRAME && p->data.keyFrameData.fieldCount != 0) {
         if(p->header.fieldEncoding != UA_FIELDENCODING_RAWDATA){
             size += UA_calcSizeBinary(&p->data.keyFrameData.fieldCount, &UA_TYPES[UA_TYPES_UINT16]);
         }
@@ -1710,31 +1718,75 @@ UA_DataSetMessage_calcSizeBinary(UA_DataSetMessage* p, UA_NetworkMessageOffsetBu
 }
 
 void
-UA_DataSetMessage_clear(const UA_DataSetMessage* p) {
+UA_DataSetMessage_clear(UA_DataSetMessage* p) {
     if(p->header.dataSetMessageType == UA_DATASETMESSAGE_DATAKEYFRAME) {
-        if(p->data.keyFrameData.dataSetFields != NULL) {
+        if(p->data.keyFrameData.dataSetFields) {
             UA_Array_delete(p->data.keyFrameData.dataSetFields,
                             p->data.keyFrameData.fieldCount,
                             &UA_TYPES[UA_TYPES_DATAVALUE]);
         }
 
         /* Json keys */
-        if(p->data.keyFrameData.fieldNames != NULL){
+        if(p->data.keyFrameData.fieldNames){
             UA_Array_delete(p->data.keyFrameData.fieldNames,
                             p->data.keyFrameData.fieldCount,
                             &UA_TYPES[UA_TYPES_STRING]);
         }
     } else if(p->header.dataSetMessageType == UA_DATASETMESSAGE_DATADELTAFRAME) {
-        if(p->data.deltaFrameData.deltaFrameFields != NULL) {
+        if(p->data.deltaFrameData.deltaFrameFields) {
             for(UA_UInt16 i = 0; i < p->data.deltaFrameData.fieldCount; i++) {
+                UA_DataSetMessage_DeltaFrameField *f =
+                    &p->data.deltaFrameData.deltaFrameFields[i];
                 if(p->header.fieldEncoding == UA_FIELDENCODING_DATAVALUE) {
-                    UA_DataValue_clear(&p->data.deltaFrameData.deltaFrameFields[i].fieldValue);
+                    UA_DataValue_clear(&f->fieldValue);
                 } else if(p->header.fieldEncoding == UA_FIELDENCODING_VARIANT) {
-                    UA_Variant_clear(&p->data.deltaFrameData.deltaFrameFields[i].fieldValue.value);
+                    UA_Variant_clear(&f->fieldValue.value);
                 }
             }
             UA_free(p->data.deltaFrameData.deltaFrameFields);
         }
     }
+
+    memset(p, 0, sizeof(UA_DataSetMessage));
 }
+
+void
+UA_NetworkMessageOffsetBuffer_clear(UA_NetworkMessageOffsetBuffer *nmob) {
+    UA_ByteString_clear(&nmob->buffer);
+
+    if(nmob->nm) {
+        UA_NetworkMessage_clear(nmob->nm);
+        UA_free(nmob->nm);
+    }
+
+#ifdef UA_ENABLE_PUBSUB_ENCRYPTION
+    UA_ByteString_clear(&nmob->encryptBuffer);
+#endif
+
+    if(nmob->offsetsSize == 0)
+        return;
+
+    for(size_t i = 0; i < nmob->offsetsSize; i++) {
+        UA_NetworkMessageOffset *offset = &nmob->offsets[i];
+        if(offset->contentType == UA_PUBSUB_OFFSETTYPE_PAYLOAD_VARIANT ||
+           offset->contentType == UA_PUBSUB_OFFSETTYPE_PAYLOAD_RAW ||
+           offset->contentType == UA_PUBSUB_OFFSETTYPE_DATASETMESSAGE_SEQUENCENUMBER ||
+           offset->contentType == UA_PUBSUB_OFFSETTYPE_NETWORKMESSAGE_SEQUENCENUMBER) {
+            UA_DataValue_delete(offset->offsetData.value.value);
+            continue;
+        }
+
+        if(offset->contentType == UA_PUBSUB_OFFSETTYPE_NETWORKMESSAGE_FIELDENCDODING) {
+            offset->offsetData.value.value->value.data = NULL;
+            UA_DataValue_delete(offset->offsetData.value.value);
+        }
+    }
+
+    UA_free(nmob->offsets);
+
+    memset(nmob, 0, sizeof(UA_NetworkMessageOffsetBuffer));
+}
+
+
 #endif /* UA_ENABLE_PUBSUB */
+

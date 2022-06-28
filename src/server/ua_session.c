@@ -1,6 +1,6 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, You can obtain one at http://mozilla.org/MPL/2.0/. 
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  *
  *    Copyright 2018 (c) Fraunhofer IOSB (Author: Julius Pfrommer)
  *    Copyright 2018 (c) Thomas Stalder, Blue Time Concept SA
@@ -37,6 +37,10 @@ void UA_Session_clear(UA_Session *session, UA_Server* server) {
     }
 #endif
 
+#ifdef UA_ENABLE_DIAGNOSTICS
+    deleteNode(server, session->sessionId, true);
+#endif
+
     UA_Session_detachFromSecureChannel(session);
     UA_ApplicationDescription_clear(&session->clientDescription);
     UA_NodeId_clear(&session->header.authenticationToken);
@@ -55,12 +59,23 @@ void UA_Session_clear(UA_Session *session, UA_Server* server) {
                     &UA_TYPES[UA_TYPES_KEYVALUEPAIR]);
     session->params = NULL;
     session->paramsSize = 0;
+
+    UA_Array_delete(session->localeIds, session->localeIdsSize,
+                    &UA_TYPES[UA_TYPES_STRING]);
+    session->localeIds = NULL;
+    session->localeIdsSize = 0;
+
+#ifdef UA_ENABLE_DIAGNOSTICS
+    UA_SessionDiagnosticsDataType_clear(&session->diagnostics);
+    UA_SessionSecurityDiagnosticsDataType_clear(&session->securityDiagnostics);
+#endif
 }
 
 void
 UA_Session_attachToSecureChannel(UA_Session *session, UA_SecureChannel *channel) {
     UA_Session_detachFromSecureChannel(session);
     session->header.channel = channel;
+    session->header.serverSession = true;
     SLIST_INSERT_HEAD(&channel->sessions, &session->header, next);
 }
 
@@ -77,6 +92,16 @@ UA_Session_detachFromSecureChannel(UA_Session *session) {
         SLIST_REMOVE(&channel->sessions, sh, UA_SessionHeader, next);
         break;
     }
+
+    /* Clean up the response queue. Their RequestId is bound to the
+     * SecureChannel so they cannot be reused. */
+#ifdef UA_ENABLE_SUBSCRIPTIONS
+    UA_PublishResponseEntry *pre;
+    while((pre = UA_Session_dequeuePublishReq(session))) {
+        UA_PublishResponse_clear(&pre->response);
+        UA_free(pre);
+    }
+#endif
 }
 
 UA_StatusCode
@@ -101,6 +126,9 @@ UA_Session_generateNonce(UA_Session *session) {
 void UA_Session_updateLifetime(UA_Session *session) {
     session->validTill = UA_DateTime_nowMonotonic() +
         (UA_DateTime)(session->timeout * UA_DATETIME_MSEC);
+#ifdef UA_ENABLE_DIAGNOSTICS
+    session->diagnostics.clientLastContactTime = UA_DateTime_now();
+#endif
 }
 
 #ifdef UA_ENABLE_SUBSCRIPTIONS
@@ -141,7 +169,7 @@ UA_Session_detachSubscription(UA_Server *server, UA_Session *session,
 
     /* Reduce the number of outstanding retransmissions */
     session->totalRetransmissionQueueSize -= sub->retransmissionQueueSize;
-    
+
     /* Send remaining publish responses if the last subscription was removed */
     if(!releasePublishResponses || !TAILQ_EMPTY(&session->subscriptions))
         return;

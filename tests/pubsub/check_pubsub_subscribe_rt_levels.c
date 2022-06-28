@@ -30,8 +30,8 @@ static void ServerDoProcess(
     const UA_UInt32 sleep_ms,             /* use at least publishing interval */
     const UA_UInt32 noOfIterateCycles)
 {
+    UA_Server_run_iterate(server, true);
     for (UA_UInt32 i = 0; i < noOfIterateCycles; i++) {
-        UA_Server_run_iterate(server, true);
         UA_fakeSleep(sleep_ms);
         UA_Server_run_iterate(server, true);
     }
@@ -333,6 +333,8 @@ START_TEST(SubscribeSingleFieldWithFixedOffsets) {
     UA_DataValue_delete(dataValue);
     UA_free(subValue);
     UA_free(subDataValueRT);
+
+    ck_assert_int_eq(UA_STATUSCODE_GOOD, UA_Server_removePublishedDataSet(server, publishedDataSetIdent));
 } END_TEST
 
 START_TEST(SetupInvalidPubSubConfigReader) {
@@ -475,6 +477,8 @@ START_TEST(SetupInvalidPubSubConfigReader) {
         ck_assert(UA_Server_freezeReaderGroupConfiguration(server, readerGroupIdentifier) == UA_STATUSCODE_BADNOTSUPPORTED); // DateTime not supported
         ck_assert(UA_Server_unfreezeReaderGroupConfiguration(server, readerGroupIdentifier) == UA_STATUSCODE_GOOD);
         ck_assert(UA_Server_unfreezeWriterGroupConfiguration(server, writerGroupIdent) == UA_STATUSCODE_GOOD);
+
+        ck_assert_int_eq(UA_STATUSCODE_GOOD, UA_Server_removePublishedDataSet(server, publishedDataSetIdent));
     } END_TEST
 
 START_TEST(SetupInvalidPubSubConfig) {
@@ -526,6 +530,8 @@ START_TEST(SetupInvalidPubSubConfig) {
     ck_assert(UA_Server_addDataSetWriter(server, writerGroupIdent, publishedDataSetIdent, &dataSetWriterConfig, &dataSetWriterIdent) == UA_STATUSCODE_BADCONFIGURATIONERROR);
 
     UA_Variant_clear(&variant);
+
+    ck_assert_int_eq(UA_STATUSCODE_GOOD, UA_Server_removePublishedDataSet(server, publishedDataSetIdent));
 } END_TEST
 
 /* additional SubscriberBeforeWriteCallback test data */
@@ -706,6 +712,8 @@ static void PublishSubscribeWithWriteCallback_Helper(
     ck_assert_int_eq(UA_STATUSCODE_GOOD, UA_Server_unfreezeReaderGroupConfiguration(server, readerGroupIdentifier));
 
     ck_assert_int_eq(UA_STATUSCODE_GOOD, UA_Server_removePubSubConnection(server, connectionIdentifier));
+
+    ck_assert_int_eq(UA_STATUSCODE_GOOD, UA_Server_removePublishedDataSet(server, publishedDataSetIdent));
 
     UA_NodeId_clear(&connectionIdentifier);
     UA_NodeId_clear(&publishedDataSetIdent);

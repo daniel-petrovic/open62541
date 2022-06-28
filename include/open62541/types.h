@@ -85,8 +85,8 @@ typedef uint16_t UA_UInt16;
  * ^^^^^
  * An integer value between -2 147 483 648 and 2 147 483 647. */
 typedef int32_t UA_Int32;
-#define UA_INT32_MIN (-2147483648)
-#define UA_INT32_MAX 2147483647
+#define UA_INT32_MIN ((int32_t)-2147483648LL)
+#define UA_INT32_MAX 2147483647L
 
 /**
  * UInt32
@@ -94,7 +94,7 @@ typedef int32_t UA_Int32;
  * An integer value between 0 and 4 294 967 295. */
 typedef uint32_t UA_UInt32;
 #define UA_UINT32_MIN 0
-#define UA_UINT32_MAX 4294967295
+#define UA_UINT32_MAX 4294967295UL
 
 /**
  * Int64
@@ -186,6 +186,9 @@ UA_String_fromChars(const char *src) UA_FUNC_ATTR_WARN_UNUSED_RESULT;
 UA_Boolean UA_EXPORT
 UA_String_equal(const UA_String *s1, const UA_String *s2);
 
+UA_Boolean UA_EXPORT
+UA_String_isEmpty(const UA_String *s);
+
 UA_EXPORT extern const UA_String UA_STRING_NULL;
 
 /**
@@ -248,7 +251,7 @@ typedef struct UA_DateTimeStruct {
     UA_UInt16 hour;
     UA_UInt16 day;   /* From 1 to 31 */
     UA_UInt16 month; /* From 1 to 12 */
-    UA_UInt16 year;
+    UA_Int16 year;   /* Can be negative (BC) */
 } UA_DateTimeStruct;
 
 UA_DateTimeStruct UA_EXPORT UA_DateTime_toStruct(UA_DateTime t);
@@ -547,7 +550,7 @@ UA_EXPANDEDNODEID_BYTESTRING_ALLOC(UA_UInt16 nsIndex, const char *chars) {
 
 static UA_INLINE UA_ExpandedNodeId
 UA_EXPANDEDNODEID_NODEID(UA_NodeId nodeId) {
-    UA_ExpandedNodeId id = {0}; id.nodeId = nodeId; return id;
+    UA_ExpandedNodeId id; memset(&id, 0, sizeof(UA_ExpandedNodeId)); id.nodeId = nodeId; return id;
 }
 
 /* Does the ExpandedNodeId point to a local node? That is, are namespaceUri and
@@ -913,6 +916,18 @@ typedef struct {
     UA_Boolean    hasServerPicoseconds : 1;
 } UA_DataValue;
 
+/* Copy the DataValue, but use only a subset of the (multidimensional) array of
+ * of the variant of the source DataValue. Returns an error code if the variant
+ * of the DataValue is not an array or if the indicated range does not fit.
+ *
+ * @param src The source DataValue
+ * @param dst The target DataValue
+ * @param range The range of the variant of the DataValue to copy
+ * @return Returns UA_STATUSCODE_GOOD or an error code */
+UA_StatusCode UA_EXPORT
+UA_DataValue_copyVariantRange(const UA_DataValue *src, UA_DataValue * UA_RESTRICT dst,
+                              const UA_NumericRange range);
+
 /**
  * DiagnosticInfo
  * ^^^^^^^^^^^^^^
@@ -1040,11 +1055,30 @@ typedef struct UA_DataTypeArray {
     const UA_DataType *types;
 } UA_DataTypeArray;
 
+/* Returns the offset and type of a structure member. The return value is false
+ * if the member was not found.
+ *
+ * If the member is an array, the offset points to the (size_t) length field.
+ * (The array pointer comes after the length field without any padding.) */
+#ifdef UA_ENABLE_TYPEDESCRIPTION
+UA_Boolean
+UA_DataType_getStructMember(const UA_DataType *type,
+                            const char *memberName,
+                            size_t *outOffset,
+                            const UA_DataType **outMemberType,
+                            UA_Boolean *outIsArray);
+#endif
+
 /* Test if the data type is a numeric builtin data type (via the typeKind field
  * of UA_DataType). This includes integers and floating point numbers. Not
  * included are Boolean, DateTime, StatusCode and Enums. */
 UA_Boolean
 UA_DataType_isNumeric(const UA_DataType *type);
+
+/* Return the Data Type Precedence-Rank defined in Part 4.
+ * If there is no Precedence-Rank assigned with the type -1 is returned.*/
+UA_Int16
+UA_DataType_getPrecedence(const UA_DataType *type);
 
 /**
  * Builtin data types can be accessed as UA_TYPES[UA_TYPES_XXX], where XXX is
@@ -1205,6 +1239,10 @@ UA_encodeJson(const void *src, const UA_DataType *type, UA_ByteString *outBuf,
  * Zero-out the entire structure initially to ensure code-compatibility when
  * more fields are added in a later release. */
 typedef struct {
+    const UA_String *namespaces;
+    size_t namespacesSize;
+    const UA_String *serverUris;
+    size_t serverUrisSize;
     const UA_DataTypeArray *customTypes; /* Begin of a linked list with custom
                                           * datatype definitions */
 } UA_DecodeJsonOptions;

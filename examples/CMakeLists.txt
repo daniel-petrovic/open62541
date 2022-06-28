@@ -26,10 +26,6 @@ if(CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)
         set(UA_TOOLS_DIR ${open62541_TOOLS_DIR})
     endif()
 
-    if(NOT UA_NODESET_DIR)
-        set(UA_NODESET_DIR ${open62541_NODESET_DIR})
-    endif()
-
     function(assign_source_group)
         # define empty function. We don't need it in standalone
     endfunction(assign_source_group)
@@ -100,9 +96,8 @@ endif()
 
 add_example(tutorial_client_firststeps tutorial_client_firststeps.c)
 
-add_example(tutorial_client_events tutorial_client_events.c)
-
 if(UA_ENABLE_SUBSCRIPTIONS_EVENTS)
+  add_example(tutorial_client_events tutorial_client_events.c)
   add_example(tutorial_server_events tutorial_server_events.c)
   add_example(server_events_random events/server_random_events.c)
   add_example(client_event_filter events/client_eventfilter.c)

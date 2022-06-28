@@ -198,7 +198,7 @@ struct UA_PubSubConfiguration {
      * change from operational to error in case of a DataSetReader
      * MessageReceiveTimeout. The status code provides additional
      * information. */
-    void (*stateChangeCallback)(UA_NodeId *Id, UA_PubSubState state,
+    void (*stateChangeCallback)(UA_Server *server, UA_NodeId *id, UA_PubSubState state,
                                 UA_StatusCode status);
     /* TODO: maybe status code provides not enough information about the state change */
 
@@ -227,7 +227,15 @@ struct UA_PubSubConfiguration {
 UA_StatusCode UA_EXPORT
 UA_ServerConfig_addPubSubTransportLayer(UA_ServerConfig *config,
                                         UA_PubSubTransportLayer pubsubTransportLayer);
-
+/**
+ * Add a new PubSub connection to the given server and open it.
+ * @param[in] server the server to add the connection to
+ * @param[in] connectionConfig the configuration for the newly added connection
+ * @param[out] connectionIdentifier if not NULL will be set to the identifier of the
+ *                                  newly added connection
+ * @return UA_STATUSCODE_GOOD if connection was successfully added, otherwise an
+ *         error code.
+ */
 UA_StatusCode UA_EXPORT
 UA_Server_addPubSubConnection(UA_Server *server,
                               const UA_PubSubConnectionConfig *connectionConfig,
@@ -241,7 +249,7 @@ UA_Server_getPubSubConnectionConfig(UA_Server *server,
 
 /* Remove Connection, identified by the NodeId. Deletion of Connection
  * removes all contained WriterGroups and Writers. */
-UA_StatusCode UA_EXPORT
+UA_StatusCode UA_EXPORT UA_THREADSAFE
 UA_Server_removePubSubConnection(UA_Server *server, const UA_NodeId connection);
 
 /**
@@ -324,7 +332,7 @@ UA_Server_getPublishedDataSetMetaData(UA_Server *server, const UA_NodeId pds,
 /* Remove PublishedDataSet, identified by the NodeId. Deletion of PDS removes
  * all contained and linked PDS Fields. Connected WriterGroups will be also
  * removed. */
-UA_StatusCode UA_EXPORT
+UA_StatusCode UA_EXPORT UA_THREADSAFE
 UA_Server_removePublishedDataSet(UA_Server *server, const UA_NodeId pds);
 
 /**
@@ -376,7 +384,7 @@ typedef struct {
     UA_ConfigurationVersionDataType configurationVersion;
 } UA_DataSetFieldResult;
 
-UA_DataSetFieldResult UA_EXPORT
+UA_DataSetFieldResult UA_EXPORT UA_THREADSAFE
 UA_Server_addDataSetField(UA_Server *server,
                           const UA_NodeId publishedDataSet,
                           const UA_DataSetFieldConfig *fieldConfig,
@@ -387,7 +395,7 @@ UA_StatusCode UA_EXPORT
 UA_Server_getDataSetFieldConfig(UA_Server *server, const UA_NodeId dsf,
                                 UA_DataSetFieldConfig *config);
 
-UA_DataSetFieldResult UA_EXPORT
+UA_DataSetFieldResult UA_EXPORT UA_THREADSAFE
 UA_Server_removeDataSetField(UA_Server *server, const UA_NodeId dsf);
 
 /**
@@ -509,7 +517,7 @@ UA_StatusCode UA_EXPORT
 UA_Server_getWriterGroupConfig(UA_Server *server, const UA_NodeId writerGroup,
                                UA_WriterGroupConfig *config);
 
-UA_StatusCode UA_EXPORT
+UA_StatusCode UA_EXPORT UA_THREADSAFE
 UA_Server_updateWriterGroupConfig(UA_Server *server, UA_NodeId writerGroupIdentifier,
                                   const UA_WriterGroupConfig *config);
 
@@ -518,7 +526,7 @@ UA_StatusCode UA_EXPORT
 UA_Server_WriterGroup_getState(UA_Server *server, UA_NodeId writerGroupIdentifier,
                                UA_PubSubState *state);
 
-UA_StatusCode UA_EXPORT
+UA_StatusCode UA_EXPORT UA_THREADSAFE
 UA_Server_removeWriterGroup(UA_Server *server, const UA_NodeId writerGroup);
 
 UA_StatusCode UA_EXPORT
@@ -527,10 +535,10 @@ UA_Server_freezeWriterGroupConfiguration(UA_Server *server, const UA_NodeId writ
 UA_StatusCode UA_EXPORT
 UA_Server_unfreezeWriterGroupConfiguration(UA_Server *server, const UA_NodeId writerGroup);
 
-UA_StatusCode UA_EXPORT
+UA_StatusCode UA_EXPORT UA_THREADSAFE
 UA_Server_setWriterGroupOperational(UA_Server *server, const UA_NodeId writerGroup);
 
-UA_StatusCode UA_EXPORT
+UA_StatusCode UA_EXPORT UA_THREADSAFE
 UA_Server_setWriterGroupDisabled(UA_Server *server, const UA_NodeId writerGroup);
 
 #ifdef UA_ENABLE_PUBSUB_ENCRYPTION
@@ -575,7 +583,7 @@ UA_DataSetWriterConfig_clear(UA_DataSetWriterConfig *pdsConfig);
  * Part 14, 7.1.5.2.1 defines: The link between the PublishedDataSet and
  * DataSetWriter shall be created when an instance of the DataSetWriterType is
  * created. */
-UA_StatusCode UA_EXPORT
+UA_StatusCode UA_EXPORT UA_THREADSAFE
 UA_Server_addDataSetWriter(UA_Server *server,
                            const UA_NodeId writerGroup, const UA_NodeId dataSet,
                            const UA_DataSetWriterConfig *dataSetWriterConfig,
@@ -591,7 +599,7 @@ UA_StatusCode UA_EXPORT
 UA_Server_DataSetWriter_getState(UA_Server *server, UA_NodeId dataSetWriterIdentifier,
                                UA_PubSubState *state);
 
-UA_StatusCode UA_EXPORT
+UA_StatusCode UA_EXPORT UA_THREADSAFE
 UA_Server_removeDataSetWriter(UA_Server *server, const UA_NodeId dsw);
 
 /**
@@ -796,7 +804,7 @@ UA_Server_addReaderGroup(UA_Server *server, UA_NodeId connectionIdentifier,
                          UA_NodeId *readerGroupIdentifier);
 
 /* Remove ReaderGroup from connection */
-UA_StatusCode UA_EXPORT
+UA_StatusCode UA_EXPORT UA_THREADSAFE
 UA_Server_removeReaderGroup(UA_Server *server, UA_NodeId groupIdentifier);
 
 UA_StatusCode UA_EXPORT

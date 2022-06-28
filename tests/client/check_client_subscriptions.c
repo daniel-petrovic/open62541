@@ -21,7 +21,6 @@
 
 UA_Server *server;
 UA_Boolean running;
-UA_ServerNetworkLayer nl;
 THREAD_HANDLE server_thread;
 static UA_Boolean noNewSubscription; /* Don't create a subscription when the
                                         session activates */
@@ -903,6 +902,10 @@ START_TEST(Client_subscription_connectionClose) {
     running = false;
     THREAD_JOIN(server_thread);
 
+    /* Send Publish requests */
+    retval = UA_Client_run_iterate(client, 1);
+    ck_assert_uint_eq(retval, UA_STATUSCODE_GOOD);
+
     /* Still receiving on the MonitoredItem */
     UA_fakeSleep((UA_UInt32)publishingInterval + 1);
     UA_Server_run_iterate(server, true);
@@ -1126,7 +1129,7 @@ START_TEST(Client_subscription_detach) {
     UA_CloseSessionRequest_init(&closeRequest);
     closeRequest.deleteSubscriptions = false;
     UA_CloseSessionResponse closeResponse;
-    
+
     __UA_Client_Service(client,
                         &closeRequest, &UA_TYPES[UA_TYPES_CLOSESESSIONREQUEST],
                         &closeResponse, &UA_TYPES[UA_TYPES_CLOSESESSIONRESPONSE]);
@@ -1242,7 +1245,7 @@ stateCallback(UA_Client *client, UA_SecureChannelState channelState,
             UA_NODEID_NUMERIC(0, UA_NS0ID_SERVER_SERVERSTATUS_CURRENTTIME);
         UA_MonitoredItemCreateRequest monRequest =
             UA_MonitoredItemCreateRequest_default(currentTime);
-    
+
         UA_MonitoredItemCreateResult monResponse =
             UA_Client_MonitoredItems_createDataChange(client, response.subscriptionId,
                                                       UA_TIMESTAMPSTORETURN_BOTH,

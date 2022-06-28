@@ -141,9 +141,12 @@ function unit_tests {
           -DUA_ENABLE_JSON_ENCODING=ON \
           -DUA_ENABLE_PUBSUB=ON \
           -DUA_ENABLE_PUBSUB_ETH_UADP=ON \
+          -DUA_ENABLE_PUBSUB_MQTT=ON \
           -DUA_ENABLE_PUBSUB_DELTAFRAMES=ON \
           -DUA_ENABLE_PUBSUB_INFORMATIONMODEL=ON \
+          -DUA_ENABLE_PUBSUB_INFORMATIONMODEL_METHODS=ON \
           -DUA_ENABLE_PUBSUB_MONITORING=ON \
+          -DUA_ENABLE_PUBSUB_MQTT=ON \
           ..
     make ${MAKEOPTS}
     set_capabilities
@@ -167,6 +170,41 @@ function unit_tests_32 {
           -DUA_FORCE_32BIT=ON \
           ..
           #-DUA_ENABLE_PUBSUB_ETH_UADP=ON \ # TODO: Enable this
+    make ${MAKEOPTS}
+    set_capabilities
+    make test ARGS="-V"
+}
+
+function unit_tests_nosub {
+    mkdir -p build; cd build; rm -rf *
+    cmake -DCMAKE_BUILD_TYPE=Debug \
+          -DUA_BUILD_EXAMPLES=ON \
+          -DUA_BUILD_UNIT_TESTS=ON \
+          -DUA_ENABLE_SUBSCRIPTIONS=OFF \
+          ..
+    make ${MAKEOPTS}
+    set_capabilities
+    make test ARGS="-V"
+}
+
+function unit_tests_diag {
+    mkdir -p build; cd build; rm -rf *
+    cmake -DCMAKE_BUILD_TYPE=Debug \
+          -DUA_BUILD_EXAMPLES=ON \
+          -DUA_BUILD_UNIT_TESTS=ON \
+          -DUA_ENABLE_DIAGNOSTICS=ON \
+          -DUA_ENABLE_DISCOVERY=ON \
+          -DUA_ENABLE_DISCOVERY_MULTICAST=ON \
+          -DUA_ENABLE_SUBSCRIPTIONS_EVENTS=ON \
+          -DUA_ENABLE_HISTORIZING=ON \
+          -DUA_ENABLE_JSON_ENCODING=ON \
+          -DUA_ENABLE_PUBSUB=ON \
+          -DUA_ENABLE_PUBSUB_ETH_UADP=ON \
+          -DUA_ENABLE_PUBSUB_DELTAFRAMES=ON \
+          -DUA_ENABLE_PUBSUB_INFORMATIONMODEL=ON \
+          -DUA_ENABLE_PUBSUB_INFORMATIONMODEL_METHODS=ON \
+          -DUA_ENABLE_PUBSUB_MONITORING=ON \
+          ..
     make ${MAKEOPTS}
     set_capabilities
     make test ARGS="-V"
@@ -249,8 +287,10 @@ function unit_tests_with_coverage {
           -DUA_ENABLE_JSON_ENCODING=ON \
           -DUA_ENABLE_PUBSUB=ON \
           -DUA_ENABLE_PUBSUB_ETH_UADP=ON \
+          -DUA_ENABLE_PUBSUB_MQTT=ON \
           -DUA_ENABLE_PUBSUB_DELTAFRAMES=ON \
           -DUA_ENABLE_PUBSUB_INFORMATIONMODEL=ON \
+          -DUA_ENABLE_PUBSUB_INFORMATIONMODEL_METHODS=ON \
           -DUA_ENABLE_PUBSUB_MONITORING=ON \
           -DUA_ENABLE_ENCRYPTION=MBEDTLS \
           ..
@@ -276,8 +316,10 @@ function unit_tests_valgrind {
           -DUA_ENABLE_HISTORIZING=ON \
           -DUA_ENABLE_JSON_ENCODING=ON \
           -DUA_ENABLE_PUBSUB=ON \
+          -DUA_ENABLE_PUBSUB_MQTT=ON \
           -DUA_ENABLE_PUBSUB_DELTAFRAMES=ON \
           -DUA_ENABLE_PUBSUB_INFORMATIONMODEL=ON \
+          -DUA_ENABLE_PUBSUB_INFORMATIONMODEL_METHODS=ON \
           -DUA_ENABLE_PUBSUB_MONITORING=ON \
           -DUA_ENABLE_UNIT_TESTS_MEMCHECK=ON \
           ..
