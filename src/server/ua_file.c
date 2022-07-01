@@ -286,7 +286,6 @@ UA_Server_writeFileCallback(UA_Server *server,
                             size_t outputSize, UA_Variant *output) {
     UA_UInt32 fileHandle = *(UA_UInt32 *)input[0].data;
     UA_ByteString *fileContentToWrite = (UA_ByteString*)input[1].data;
-    UA_StatusCode retval = UA_STATUSCODE_GOOD;
     UA_FileType *fileObject = getFileTypeObject(server, objectId);
     if(!fileObject)
     {
@@ -301,14 +300,23 @@ UA_Server_writeFileCallback(UA_Server *server,
        (fileInfo->openFileMode != (UA_OPENFILEMODE_ERASEEXISTING | UA_OPENFILEMODE_WRITE))) &&
        (fileInfo->openFileMode != UA_OPENFILEMODE_READ))
     {
+        /*
         for(size_t i = 0; i < fileContentToWrite->length; i++)
         {
             UA_file_print(fileInfo->file, "%c", fileContentToWrite->data[i]);
         }
-        return retval;
+        */
+        
+        // daniel.petrovic: writing one character at a time is inefficient
+        //                  -> try to minimize number of system calls
+        if (UA_file_write(fileContentToWrite->data, 1, fileContentToWrite->length, fileInfo->file) < fileContentToWrite->length) {
+            return UA_STATUSCODE_BADINTERNALERROR;
+        }
+        
+        return UA_STATUSCODE_GOOD;
     }
-    retval = UA_STATUSCODE_BADINVALIDSTATE;
-    return retval;
+    
+    return UA_STATUSCODE_BADINVALIDSTATE;
 }
 
 static UA_StatusCode
