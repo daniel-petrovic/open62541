@@ -428,6 +428,12 @@ UA_Server_addFileNode(UA_Server *server, const UA_NodeId requestedNewNodeId,
                        const UA_ObjectAttributes attr,
                        const UA_String filePath,
                        void *nodeContext, UA_NodeId *outNewNodeId) {
+    UA_NodeId newNodeId;
+    if (!outNewNodeId) {
+        UA_NodeId_init(&newNodeId);
+        outNewNodeId = &newNodeId;
+    }
+
     UA_StatusCode retval = UA_Server_addObjectNode(server, requestedNewNodeId,
                             parentNodeId, referenceTypeId, browseName,
                             UA_NODEID_NUMERIC(0, UA_NS0ID_FILETYPE),
@@ -448,18 +454,11 @@ UA_Server_addFileNode(UA_Server *server, const UA_NodeId requestedNewNodeId,
     }
     UA_file_close(file);
 
-    //If NodeId is assigned by server
-    if(outNewNodeId)
-    {
-        retval |= setFileTypeInfo(server, *outNewNodeId, filePath);
-        retval |= setFileMethodCallbacks(server, *outNewNodeId);
-    }
+    retval |= setFileTypeInfo(server, *outNewNodeId, filePath);
+    retval |= setFileMethodCallbacks(server, *outNewNodeId);
 
-    //else use the  NodeId requested by user
-    else
-    {
-        retval |= setFileTypeInfo(server, requestedNewNodeId, filePath);
-        retval |= setFileMethodCallbacks(server, requestedNewNodeId);
+    if (outNewNodeId == &newNodeId) {
+        UA_NodeId_clear(&newNodeId);
     }
 
     return retval;
