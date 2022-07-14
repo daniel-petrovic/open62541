@@ -300,15 +300,6 @@ UA_Server_writeFileCallback(UA_Server *server,
        (fileInfo->openFileMode != (UA_OPENFILEMODE_ERASEEXISTING | UA_OPENFILEMODE_WRITE))) &&
        (fileInfo->openFileMode != UA_OPENFILEMODE_READ))
     {
-        /*
-        for(size_t i = 0; i < fileContentToWrite->length; i++)
-        {
-            UA_file_print(fileInfo->file, "%c", fileContentToWrite->data[i]);
-        }
-        */
-        
-        // daniel.petrovic: writing one character at a time is inefficient
-        //                  -> try to minimize number of system calls
         if (UA_file_write(fileContentToWrite->data, 1, fileContentToWrite->length, fileInfo->file) < fileContentToWrite->length) {
             return UA_STATUSCODE_BADINTERNALERROR;
         }
