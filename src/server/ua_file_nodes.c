@@ -270,8 +270,9 @@ UA_Server_readFileCallback(UA_Server *server,
         }
         readBuffer->length = lengthToRead;
         readBuffer->data = (UA_Byte*) UA_malloc(readBuffer->length * sizeof(UA_Byte));
-        if (UA_file_read(readBuffer->data, (readBuffer->length + 1), 1, fileInfo->file) != 1)
+        if (UA_file_read(readBuffer->data, readBuffer->length, 1, fileInfo->file) != 1)
         {
+            UA_ByteString_delete(readBuffer);
             return UA_STATUSCODE_BADUNEXPECTEDERROR;
         }
     }
