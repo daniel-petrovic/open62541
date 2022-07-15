@@ -13,6 +13,7 @@
  *    Copyright 2019-2021 (c) Kalycito Infotech Private Limited
  *    Copyright 2019 (c) HMS Industrial Networks AB (Author: Jonas Green)
  *    Copyright 2021 (c) Fraunhofer IOSB (Author: Andreas Ebner)
+ *    Copyright 2022 (c) Christian von Arnim, ISW University of Stuttgart (for VDW and umati)
  */
 
 #ifndef UA_SERVER_INTERNAL_H_
@@ -472,6 +473,11 @@ writeObjectProperty(UA_Server *server, const UA_NodeId objectId,
                     const UA_QualifiedName propertyName, const UA_Variant value);
 
 UA_StatusCode
+writeObjectProperty_scalar(UA_Server *server, const UA_NodeId objectId,
+                                     const UA_QualifiedName propertyName,
+                                     const void *value, const UA_DataType *type);
+
+UA_StatusCode
 getNodeContext(UA_Server *server, UA_NodeId nodeId, void **nodeContext);
 
 UA_StatusCode
@@ -749,6 +755,25 @@ UA_NODESTORE_GETFROMREF(UA_Server *server, UA_NodePointer target) {
 #define UA_NODESTORE_GETREFERENCETYPEID(server, index)                  \
     server->config.nodestore.getReferenceTypeId(server->config.nodestore.context, \
                                                 index)
+
+/* Handling of Locales */
+
+/* Returns a shallow copy */
+UA_LocalizedText
+UA_Session_getNodeDisplayName(const UA_Session *session,
+                              const UA_NodeHead *head);
+
+UA_LocalizedText
+UA_Session_getNodeDescription(const UA_Session *session,
+                              const UA_NodeHead *head);
+
+UA_StatusCode
+UA_Node_insertOrUpdateDisplayName(UA_NodeHead *head,
+                                  const UA_LocalizedText *value);
+
+UA_StatusCode
+UA_Node_insertOrUpdateDescription(UA_NodeHead *head,
+                                  const UA_LocalizedText *value);
 
 _UA_END_DECLS
 
