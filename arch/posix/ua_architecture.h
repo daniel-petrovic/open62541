@@ -141,6 +141,7 @@ void UA_sleep_ms(unsigned long ms);
 #define UA_file_no(fileptr) fileno(fileptr)
 #define UA_file_print fprintf
 #define UA_file_read(readbuffer, elementSize, count, filePtr) fread(readbuffer, elementSize, count, filePtr)
+#define UA_file_write(writebuffer, elementSize, count, filePtr) fread(writebuffer, elementSize, count, filePtr)
 #define UA_file_error(filePtr) ferror(filePtr)
 #define UA_file_eof(filePtr) feof(filePtr)
 #endif

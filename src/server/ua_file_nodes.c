@@ -127,7 +127,6 @@ getOpenFileResult(UA_FileType *fileObject, UA_Byte fileOpenMode) {
         if(!file)
         {
             UA_LOG_ERROR(UA_Log_Stdout, UA_LOGCATEGORY_SERVER, "Error occured while opening the file");
-            return UA_STATUSCODE_BADNOTFOUND;
         }
         return file;
     }
@@ -139,7 +138,6 @@ getOpenFileResult(UA_FileType *fileObject, UA_Byte fileOpenMode) {
         if(!file)
         {
             UA_LOG_ERROR(UA_Log_Stdout, UA_LOGCATEGORY_SERVER, "Error occured while opening the file");
-            return UA_STATUSCODE_BADNOTFOUND;
         }
         return file;
     }
@@ -152,7 +150,6 @@ getOpenFileResult(UA_FileType *fileObject, UA_Byte fileOpenMode) {
         if(!file)
         {
             UA_LOG_ERROR(UA_Log_Stdout, UA_LOGCATEGORY_SERVER, "Error occured while opening the file");
-            return UA_STATUSCODE_BADNOTFOUND;
         }
         return file;
     }
@@ -164,7 +161,6 @@ getOpenFileResult(UA_FileType *fileObject, UA_Byte fileOpenMode) {
         if(!file)
         {
             UA_LOG_ERROR(UA_Log_Stdout, UA_LOGCATEGORY_SERVER, "Error occured while opening the file");
-            return UA_STATUSCODE_BADNOTFOUND;
         }
         return file;
     }
@@ -274,7 +270,11 @@ UA_Server_readFileCallback(UA_Server *server,
         }
         readBuffer->length = lengthToRead;
         readBuffer->data = (UA_Byte*) UA_malloc(readBuffer->length * sizeof(UA_Byte));
-        UA_file_read(readBuffer->data, (readBuffer->length + 1), 1, fileInfo->file);
+        if (UA_file_read(readBuffer->data, readBuffer->length, 1, fileInfo->file) != 1)
+        {
+            UA_ByteString_delete(readBuffer);
+            return UA_STATUSCODE_BADUNEXPECTEDERROR;
+        }
     }
     UA_Variant_setScalarCopy(output, readBuffer, &UA_TYPES[UA_TYPES_BYTESTRING]);
     UA_ByteString_delete(readBuffer);
@@ -290,7 +290,6 @@ UA_Server_writeFileCallback(UA_Server *server,
                             size_t outputSize, UA_Variant *output) {
     UA_UInt32 fileHandle = *(UA_UInt32 *)input[0].data;
     UA_ByteString *fileContentToWrite = (UA_ByteString*)input[1].data;
-    UA_StatusCode retval = UA_STATUSCODE_GOOD;
     UA_FileType *fileObject = getFileTypeObject(server, objectId);
     if(!fileObject)
     {
@@ -305,14 +304,14 @@ UA_Server_writeFileCallback(UA_Server *server,
        (fileInfo->openFileMode != (UA_OPENFILEMODE_ERASEEXISTING | UA_OPENFILEMODE_WRITE))) &&
        (fileInfo->openFileMode != UA_OPENFILEMODE_READ))
     {
-        for(size_t i = 0; i < fileContentToWrite->length; i++)
-        {
-            UA_file_print(fileInfo->file, "%c", fileContentToWrite->data[i]);
+        if (UA_file_write(fileContentToWrite->data, 1, fileContentToWrite->length, fileInfo->file) < fileContentToWrite->length) {
+            return UA_STATUSCODE_BADINTERNALERROR;
         }
-        return retval;
+        
+        return UA_STATUSCODE_GOOD;
     }
-    retval = UA_STATUSCODE_BADINVALIDSTATE;
-    return retval;
+    
+    return UA_STATUSCODE_BADINVALIDSTATE;
 }
 
 static UA_StatusCode
@@ -424,6 +423,12 @@ UA_Server_addFileNode(UA_Server *server, const UA_NodeId requestedNewNodeId,
                        const UA_ObjectAttributes attr,
                        const UA_String filePath,
                        void *nodeContext, UA_NodeId *outNewNodeId) {
+    UA_NodeId newNodeId;
+    if (!outNewNodeId) {
+        UA_NodeId_init(&newNodeId);
+        outNewNodeId = &newNodeId;
+    }
+
     UA_StatusCode retval = UA_Server_addObjectNode(server, requestedNewNodeId,
                             parentNodeId, referenceTypeId, browseName,
                             UA_NODEID_NUMERIC(0, UA_NS0ID_FILETYPE),
@@ -444,18 +449,11 @@ UA_Server_addFileNode(UA_Server *server, const UA_NodeId requestedNewNodeId,
     }
     UA_file_close(file);
 
-    //If NodeId is assigned by server
-    if(outNewNodeId)
-    {
-        retval |= setFileTypeInfo(server, *outNewNodeId, filePath);
-        retval |= setFileMethodCallbacks(server, *outNewNodeId);
-    }
+    retval |= setFileTypeInfo(server, *outNewNodeId, filePath);
+    retval |= setFileMethodCallbacks(server, *outNewNodeId);
 
-    //else use the  NodeId requested by user
-    else
-    {
-        retval |= setFileTypeInfo(server, requestedNewNodeId, filePath);
-        retval |= setFileMethodCallbacks(server, requestedNewNodeId);
+    if (outNewNodeId == &newNodeId) {
+        UA_NodeId_clear(&newNodeId);
     }
 
     return retval;

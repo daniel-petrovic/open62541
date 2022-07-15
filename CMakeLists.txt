@@ -925,7 +925,7 @@ set(lib_sources ${PROJECT_SOURCE_DIR}/src/ua_types.c
                 ${PROJECT_SOURCE_DIR}/src/server/ua_server_utils.c
                 ${PROJECT_SOURCE_DIR}/src/server/ua_server_discovery.c
                 ${PROJECT_SOURCE_DIR}/src/server/ua_server_async.c
-                ${PROJECT_SOURCE_DIR}/src/server/ua_file.c
+                ${PROJECT_SOURCE_DIR}/src/server/ua_file_nodes.c
                 ${PROJECT_SOURCE_DIR}/src/pubsub/ua_pubsub_networkmessage.c
                 ${PROJECT_SOURCE_DIR}/src/pubsub/ua_pubsub_writer.c
                 ${PROJECT_SOURCE_DIR}/src/pubsub/ua_pubsub_writergroup.c
